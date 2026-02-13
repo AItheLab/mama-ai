@@ -75,12 +75,13 @@ export function createSandbox(auditStore?: AuditStore): Sandbox {
 		params: Record<string, unknown>,
 		requestedBy = 'agent',
 	): Promise<CapabilityResult> {
+		const baseParams: Record<string, unknown> = { ...params, requestedBy };
 		const capability = capabilities.get(capName);
 		if (!capability) {
 			const entry = createDeniedAuditEntry(
 				capName,
 				action,
-				params,
+				baseParams,
 				`Unknown capability: ${capName}`,
 				requestedBy,
 			);
@@ -94,7 +95,7 @@ export function createSandbox(auditStore?: AuditStore): Sandbox {
 			};
 		}
 
-		const resource = (params.path ?? params.command ?? params.url ?? '') as string;
+		const resource = (baseParams.path ?? baseParams.command ?? baseParams.url ?? '') as string;
 		const permission = check(capName, action, resource, requestedBy);
 
 		if (!permission.allowed) {
@@ -104,7 +105,13 @@ export function createSandbox(auditStore?: AuditStore): Sandbox {
 				resource,
 				reason: permission.reason,
 			});
-			const entry = createDeniedAuditEntry(capName, action, params, permission.reason, requestedBy);
+			const entry = createDeniedAuditEntry(
+				capName,
+				action,
+				baseParams,
+				permission.reason,
+				requestedBy,
+			);
 			auditStore?.log(entry);
 			return {
 				success: false,
@@ -122,7 +129,7 @@ export function createSandbox(auditStore?: AuditStore): Sandbox {
 				const entry = createDeniedAuditEntry(
 					capName,
 					action,
-					params,
+					baseParams,
 					'No approval handler available',
 					requestedBy,
 				);
@@ -140,7 +147,7 @@ export function createSandbox(auditStore?: AuditStore): Sandbox {
 				capability: capName,
 				action,
 				resource,
-				context: params.context as string | undefined,
+				context: baseParams.context as string | undefined,
 			};
 
 			const approved = await approvalHandler(approvalReq);
@@ -152,7 +159,7 @@ export function createSandbox(auditStore?: AuditStore): Sandbox {
 					capability: capName,
 					action,
 					resource,
-					params,
+					params: baseParams,
 					decision: 'user-denied',
 					result: 'denied',
 					durationMs: 0,
@@ -169,8 +176,13 @@ export function createSandbox(auditStore?: AuditStore): Sandbox {
 			}
 		}
 
+		const executionParams =
+			permission.level === 'user-approved'
+				? ({ ...baseParams, __approvedByUser: true } as Record<string, unknown>)
+				: baseParams;
+
 		// Execute the capability
-		const result = await capability.execute(action, params);
+		const result = await capability.execute(action, executionParams);
 		auditStore?.log(result.auditEntry);
 
 		logger.info('Capability executed', {

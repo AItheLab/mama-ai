@@ -19,6 +19,9 @@ export interface ShellSandboxConfig {
 
 type SegmentClassification = 'safe' | 'ask' | 'denied' | 'unknown';
 
+const SHELL_EXPANSION_PATTERN = /`|\$\(|\$\{|<\(|>\(|\n/;
+const SHELL_REDIRECTION_PATTERN = /(^|\s)(?:>|>>|<|<<|1>|1>>|2>|2>>|&>)/;
+
 /**
  * Splits a compound command string into individual segments by
  * pipe (|), semicolon (;), and logical operators (&& and ||).
@@ -39,12 +42,19 @@ export function classifySegment(
 	config: ShellSandboxConfig,
 ): SegmentClassification {
 	const trimmed = segment.trim();
+	const lowered = trimmed.toLowerCase();
 
 	// Check denied patterns first — substring match
 	for (const pattern of config.deniedPatterns) {
-		if (trimmed.includes(pattern)) {
+		if (lowered.includes(pattern.toLowerCase())) {
 			return 'denied';
 		}
+	}
+
+	// Shell expansions and redirections are never auto-approved.
+	// They can introduce side effects or hidden command execution.
+	if (SHELL_EXPANSION_PATTERN.test(trimmed) || SHELL_REDIRECTION_PATTERN.test(trimmed)) {
+		return 'ask';
 	}
 
 	// Extract the command base (first word, or first two words for compound commands like "git status")
@@ -103,6 +113,11 @@ export function createShellCapability(config: ShellSandboxConfig): Capability {
 		}
 
 		let needsApproval = false;
+
+		// Compound commands are never auto-approved.
+		if (segments.length > 1) {
+			needsApproval = true;
+		}
 
 		for (const segment of segments) {
 			const classification = classifySegment(segment, config);
@@ -185,6 +200,32 @@ export function createShellCapability(config: ShellSandboxConfig): Capability {
 				success: false,
 				output: null,
 				error: decision.reason,
+				auditEntry: entry,
+				durationMs: 0,
+			};
+		}
+
+		if (decision.level === 'user-approved' && params.__approvedByUser !== true) {
+			const entry: AuditEntry = {
+				id: uuidv4(),
+				timestamp: new Date(),
+				capability: 'shell',
+				action,
+				resource: command,
+				params: { command, cwd, timeout },
+				decision: 'rule-denied',
+				result: 'denied',
+				error: 'Missing explicit user approval token',
+				durationMs: 0,
+				requestedBy: request.requestedBy,
+			};
+
+			logger.warn('Shell execution blocked: missing approval token', { command });
+
+			return {
+				success: false,
+				output: null,
+				error: 'Missing explicit user approval token',
 				auditEntry: entry,
 				durationMs: 0,
 			};

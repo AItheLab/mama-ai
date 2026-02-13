@@ -1,4 +1,11 @@
-import { readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+	existsSync,
+	readdirSync,
+	readFileSync,
+	realpathSync,
+	unlinkSync,
+	writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 import micromatch from 'micromatch';
 import { v4 as uuidv4 } from 'uuid';
@@ -97,27 +104,58 @@ export function createFsCapability(config: FilesystemSandboxConfig, homePath: st
 		return path.resolve(expanded);
 	}
 
+	function resolveActionPath(
+		resolvedPath: string,
+		action: string,
+	): { ok: true; path: string } | { ok: false; reason: string } {
+		try {
+			if (action === 'write') {
+				// For new files, resolve symlinks in parent directories to prevent escapes.
+				if (!existsSync(resolvedPath)) {
+					const parent = path.dirname(resolvedPath);
+					const realParent = realpathSync(parent);
+					return { ok: true, path: path.join(realParent, path.basename(resolvedPath)) };
+				}
+			}
+
+			return { ok: true, path: realpathSync(resolvedPath) };
+		} catch (err: unknown) {
+			const reason = err instanceof Error ? err.message : 'Failed to resolve real path';
+			return { ok: false, reason };
+		}
+	}
+
 	function checkPermission(request: PermissionRequest): PermissionDecision {
 		const resolvedPath = resolveFsPath(request.resource);
+		const actionPath = resolveActionPath(resolvedPath, request.action);
+
+		if (!actionPath.ok) {
+			return {
+				allowed: false,
+				reason: `Path resolution failed for "${request.resource}": ${actionPath.reason}`,
+				level: 'denied',
+			};
+		}
+		const effectivePath = actionPath.path;
 
 		// Detect path traversal
-		if (isPathTraversal(request.resource, resolvedPath, homePath)) {
+		if (isPathTraversal(request.resource, effectivePath, homePath)) {
 			logger.warn('Path traversal detected', {
 				raw: request.resource,
-				resolved: resolvedPath,
+				resolved: effectivePath,
 			});
 			return {
 				allowed: false,
-				reason: `Path traversal detected: ${request.resource} resolves to ${resolvedPath}`,
+				reason: `Path traversal detected: ${request.resource} resolves to ${effectivePath}`,
 				level: 'denied',
 			};
 		}
 
 		// 1. Check denied paths FIRST (always wins)
 		for (const deniedPattern of resolvedDeniedPatterns) {
-			if (micromatch.isMatch(resolvedPath, deniedPattern)) {
+			if (micromatch.isMatch(effectivePath, deniedPattern)) {
 				logger.debug('Path denied by rule', {
-					path: resolvedPath,
+					path: effectivePath,
 					pattern: deniedPattern,
 				});
 				return {
@@ -129,13 +167,13 @@ export function createFsCapability(config: FilesystemSandboxConfig, homePath: st
 		}
 
 		// 2. Workspace is always allowed (auto level)
-		if (resolvedPath === resolvedWorkspace || resolvedPath.startsWith(`${resolvedWorkspace}/`)) {
+		if (effectivePath === resolvedWorkspace || effectivePath.startsWith(`${resolvedWorkspace}/`)) {
 			return { allowed: true, level: 'auto' };
 		}
 
 		// 3. Check allowed paths: find matching rule by glob + action
 		for (const rule of resolvedAllowedRules) {
-			const matchesPath = micromatch.isMatch(resolvedPath, rule.resolvedPattern);
+			const matchesPath = micromatch.isMatch(effectivePath, rule.resolvedPattern);
 			const matchesAction = rule.actions.includes(request.action);
 
 			if (matchesPath && matchesAction) {
@@ -194,7 +232,7 @@ export function createFsCapability(config: FilesystemSandboxConfig, homePath: st
 			capability: 'filesystem',
 			action,
 			resource: rawPath,
-			requestedBy: 'agent',
+			requestedBy: (params.requestedBy as string | undefined) ?? 'agent',
 		};
 		const decision = checkPermission(permRequest);
 
@@ -223,6 +261,50 @@ export function createFsCapability(config: FilesystemSandboxConfig, homePath: st
 			};
 		}
 
+		if (decision.level === 'user-approved' && params.__approvedByUser !== true) {
+			const auditEntry = createAuditEntry(
+				action,
+				resolvedPath,
+				params,
+				'rule-denied',
+				'denied',
+				0,
+				undefined,
+				'Missing explicit user approval token',
+				permRequest.requestedBy,
+			);
+			return {
+				success: false,
+				output: null,
+				error: 'Missing explicit user approval token',
+				auditEntry,
+				durationMs: 0,
+			};
+		}
+
+		const actionPath = resolveActionPath(resolvedPath, action);
+		if (!actionPath.ok) {
+			const auditEntry = createAuditEntry(
+				action,
+				resolvedPath,
+				params,
+				'error',
+				'error',
+				0,
+				undefined,
+				`Path resolution failed: ${actionPath.reason}`,
+				permRequest.requestedBy,
+			);
+			return {
+				success: false,
+				output: null,
+				error: `Path resolution failed: ${actionPath.reason}`,
+				auditEntry,
+				durationMs: 0,
+			};
+		}
+		const executionPath = actionPath.path;
+
 		const start = Date.now();
 
 		try {
@@ -231,36 +313,36 @@ export function createFsCapability(config: FilesystemSandboxConfig, homePath: st
 
 			switch (action) {
 				case 'read': {
-					const content = readFileSync(resolvedPath, 'utf-8');
+					const content = readFileSync(executionPath, 'utf-8');
 					output = content;
 					outputStr = content;
 					break;
 				}
 				case 'write': {
 					const content = (params.content as string) ?? '';
-					writeFileSync(resolvedPath, content, 'utf-8');
+					writeFileSync(executionPath, content, 'utf-8');
 					const bytesWritten = Buffer.byteLength(content, 'utf-8');
 					output = { bytesWritten };
 					outputStr = `${String(bytesWritten)} bytes written`;
 					break;
 				}
 				case 'list': {
-					const entries = readdirSync(resolvedPath);
+					const entries = readdirSync(executionPath);
 					output = entries;
 					outputStr = entries.join('\n');
 					break;
 				}
 				case 'delete': {
-					unlinkSync(resolvedPath);
+					unlinkSync(executionPath);
 					output = { deleted: true };
-					outputStr = `Deleted ${resolvedPath}`;
+					outputStr = `Deleted ${executionPath}`;
 					break;
 				}
 				default: {
 					const durationMs = Date.now() - start;
 					const auditEntry = createAuditEntry(
 						action,
-						resolvedPath,
+						executionPath,
 						params,
 						'rule-denied',
 						'error',
@@ -283,17 +365,19 @@ export function createFsCapability(config: FilesystemSandboxConfig, homePath: st
 				decision.level === 'user-approved' ? 'user-approved' : 'auto-approved';
 			const auditEntry = createAuditEntry(
 				action,
-				resolvedPath,
+				executionPath,
 				params,
 				decisionLabel,
 				'success',
 				durationMs,
 				truncateOutput(outputStr, AUDIT_OUTPUT_MAX_BYTES),
+				undefined,
+				permRequest.requestedBy,
 			);
 
 			logger.debug('Filesystem action executed', {
 				action,
-				path: resolvedPath,
+				path: executionPath,
 				durationMs,
 			});
 
@@ -310,19 +394,20 @@ export function createFsCapability(config: FilesystemSandboxConfig, homePath: st
 
 			logger.error('Filesystem action failed', {
 				action,
-				path: resolvedPath,
+				path: executionPath,
 				error: errorMessage,
 			});
 
 			const auditEntry = createAuditEntry(
 				action,
-				resolvedPath,
+				executionPath,
 				params,
 				'error',
 				'error',
 				durationMs,
 				undefined,
 				errorMessage,
+				permRequest.requestedBy,
 			);
 
 			return {
@@ -344,6 +429,7 @@ export function createFsCapability(config: FilesystemSandboxConfig, homePath: st
 		durationMs: number,
 		output?: string,
 		error?: string,
+		requestedBy?: string,
 	): AuditEntry {
 		return {
 			id: uuidv4(),
@@ -357,7 +443,7 @@ export function createFsCapability(config: FilesystemSandboxConfig, homePath: st
 			output,
 			error,
 			durationMs,
-			requestedBy: 'agent',
+			requestedBy: requestedBy ?? 'agent',
 		};
 	}
 

@@ -24,6 +24,9 @@
   ],
   "author": "Alex (AleksandarLabs)",
   "license": "MIT",
+  "engines": {
+    "node": ">=22 <25"
+  },
   "packageManager": "pnpm@10.24.0",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.74.0",

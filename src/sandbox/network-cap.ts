@@ -74,6 +74,7 @@ export function createNetworkCapability(config: NetworkSandboxConfig): Capabilit
 		params: Record<string, unknown>,
 	): Promise<CapabilityResult> {
 		const startTime = Date.now();
+		const requestedBy = (params.requestedBy as string | undefined) ?? 'agent';
 		const url = params.url as string | undefined;
 
 		if (!url || typeof url !== 'string') {
@@ -85,6 +86,7 @@ export function createNetworkCapability(config: NetworkSandboxConfig): Capabilit
 				result: 'error',
 				error: 'Missing or invalid "url" parameter',
 				durationMs: Date.now() - startTime,
+				requestedBy,
 			});
 			return {
 				success: false,
@@ -104,7 +106,7 @@ export function createNetworkCapability(config: NetworkSandboxConfig): Capabilit
 			capability: 'network',
 			action,
 			resource: url,
-			requestedBy: 'agent',
+			requestedBy,
 		});
 
 		if (!permission.allowed) {
@@ -116,6 +118,7 @@ export function createNetworkCapability(config: NetworkSandboxConfig): Capabilit
 				result: 'denied',
 				error: permission.reason,
 				durationMs: Date.now() - startTime,
+				requestedBy,
 			});
 
 			logger.warn('Network request denied', {
@@ -133,6 +136,27 @@ export function createNetworkCapability(config: NetworkSandboxConfig): Capabilit
 			};
 		}
 
+		if (permission.level === 'user-approved' && params.__approvedByUser !== true) {
+			const auditEntry = createAuditEntry({
+				action,
+				resource: url,
+				params: { url, method },
+				decision: 'rule-denied',
+				result: 'denied',
+				error: 'Missing explicit user approval token',
+				durationMs: Date.now() - startTime,
+				requestedBy,
+			});
+
+			return {
+				success: false,
+				output: null,
+				error: 'Missing explicit user approval token',
+				auditEntry,
+				durationMs: auditEntry.durationMs,
+			};
+		}
+
 		// Check rate limit
 		if (isRateLimited()) {
 			const error = `Rate limit exceeded: ${config.rateLimitPerMinute} requests per minute`;
@@ -144,6 +168,7 @@ export function createNetworkCapability(config: NetworkSandboxConfig): Capabilit
 				result: 'error',
 				error,
 				durationMs: Date.now() - startTime,
+				requestedBy,
 			});
 
 			logger.warn('Network rate limit exceeded', {
@@ -207,6 +232,7 @@ export function createNetworkCapability(config: NetworkSandboxConfig): Capabilit
 				result: 'success',
 				output: `HTTP ${response.status} ${response.statusText}`,
 				durationMs,
+				requestedBy,
 			});
 
 			// Add domain to session-approved on success
@@ -251,6 +277,7 @@ export function createNetworkCapability(config: NetworkSandboxConfig): Capabilit
 				result: 'error',
 				error: errorMessage,
 				durationMs,
+				requestedBy,
 			});
 
 			logger.error('Network request failed', {
@@ -279,6 +306,7 @@ export function createNetworkCapability(config: NetworkSandboxConfig): Capabilit
 		output?: string;
 		error?: string;
 		durationMs: number;
+		requestedBy: string;
 	}): AuditEntry {
 		return {
 			id: uuidv4(),
@@ -292,7 +320,7 @@ export function createNetworkCapability(config: NetworkSandboxConfig): Capabilit
 			output: fields.output,
 			error: fields.error,
 			durationMs: fields.durationMs,
-			requestedBy: 'agent',
+			requestedBy: fields.requestedBy,
 		};
 	}
 

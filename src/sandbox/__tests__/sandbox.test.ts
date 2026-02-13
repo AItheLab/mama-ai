@@ -169,4 +169,42 @@ describe('Sandbox', () => {
 		expect(result.success).toBe(false);
 		expect(result.error).toContain('User denied');
 	});
+
+	it('injects explicit approval token before executing ask-level capability', async () => {
+		const sandbox = createSandbox();
+		let receivedParams: Record<string, unknown> | undefined;
+
+		const cap: Capability = {
+			name: 'shell',
+			description: 'Test',
+			checkPermission: () => ({ allowed: true, level: 'user-approved' }),
+			execute: vi.fn(async (_action, params) => {
+				receivedParams = params;
+				return {
+					success: true,
+					output: 'ok',
+					durationMs: 1,
+					auditEntry: {
+						id: 'test',
+						timestamp: new Date(),
+						capability: 'shell',
+						action: _action,
+						resource: String(params.command ?? ''),
+						decision: 'user-approved',
+						result: 'success',
+						durationMs: 1,
+						requestedBy: String(params.requestedBy ?? 'agent'),
+					},
+				};
+			}),
+		};
+
+		sandbox.register(cap);
+		sandbox.setApprovalHandler(async () => true);
+
+		const result = await sandbox.execute('shell', 'run', { command: 'echo test' }, 'tester');
+		expect(result.success).toBe(true);
+		expect(receivedParams?.__approvedByUser).toBe(true);
+		expect(receivedParams?.requestedBy).toBe('tester');
+	});
 });

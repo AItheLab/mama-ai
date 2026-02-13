@@ -20,12 +20,59 @@ interface AuditStore {
 	close(): void;
 }
 
+function createInMemoryAuditStore(): AuditStore {
+	const entries: AuditEntry[] = [];
+
+	function toStoredEntry(entry: AuditEntry): AuditEntry {
+		return {
+			...entry,
+			output: entry.output?.slice(0, 1024),
+			params: entry.params ? JSON.parse(JSON.stringify(entry.params)) : undefined,
+		};
+	}
+
+	function sortNewest(items: AuditEntry[]): AuditEntry[] {
+		return [...items].sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+	}
+
+	return {
+		log(entry: AuditEntry): void {
+			entries.push(toStoredEntry(entry));
+		},
+		query(filters: AuditFilters): AuditEntry[] {
+			const filtered = entries.filter((entry) => {
+				if (filters.capability && entry.capability !== filters.capability) return false;
+				if (filters.action && entry.action !== filters.action) return false;
+				if (filters.result && entry.result !== filters.result) return false;
+				if (filters.requestedBy && entry.requestedBy !== filters.requestedBy) return false;
+				if (filters.since && entry.timestamp < filters.since) return false;
+				if (filters.until && entry.timestamp > filters.until) return false;
+				return true;
+			});
+			return sortNewest(filtered).slice(0, 1000);
+		},
+		getRecent(limit: number): AuditEntry[] {
+			return sortNewest(entries).slice(0, limit);
+		},
+		close(): void {
+			// No-op for in-memory store
+		},
+	};
+}
+
 /**
  * Creates an append-only audit log backed by SQLite.
  * Uses WAL mode for crash safety.
  */
 export function createAuditStore(dbPath: string): AuditStore {
-	const db = new Database(dbPath);
+	let db: InstanceType<typeof Database>;
+	try {
+		db = new Database(dbPath);
+	} catch (err: unknown) {
+		const reason = err instanceof Error ? err.message : String(err);
+		logger.warn('SQLite audit store unavailable, using in-memory fallback', { reason });
+		return createInMemoryAuditStore();
+	}
 
 	// Enable WAL mode for crash safety
 	db.pragma('journal_mode = WAL');
