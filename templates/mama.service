@@ -1,0 +1,14 @@
+[Unit]
+Description=Mama AI Agent
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/mama daemon
+Restart=on-failure
+RestartSec=10
+User=%i
+Environment=MAMA_HOME=%h/.mama
+
+[Install]
+WantedBy=default.target

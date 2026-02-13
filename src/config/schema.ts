@@ -54,12 +54,14 @@ const TerminalChannelSchema = z.object({
 const TelegramChannelSchema = z.object({
 	enabled: z.boolean().default(false),
 	botToken: z.string().default(''),
+	defaultChatId: z.number().int().optional(),
 });
 
 const ApiChannelSchema = z.object({
 	enabled: z.boolean().default(false),
 	host: z.string().default('127.0.0.1'),
 	port: z.number().int().min(1).max(65535).default(3377),
+	token: z.string().default(''),
 });
 
 const ChannelsSchema = z.object({
@@ -137,9 +139,39 @@ const HeartbeatSchema = z.object({
 	heartbeatFile: z.string().default('~/.mama/heartbeat.md'),
 });
 
+const FileWatcherTriggerSchema = z.object({
+	path: z.string(),
+	events: z.array(z.enum(['add', 'change', 'unlink', 'rename'])).default(['add']),
+	task: z.string().min(1),
+});
+
+const WebhookHookSchema = z.object({
+	id: z.string().min(1),
+	token: z.string().default(''),
+	task: z.string().min(1),
+});
+
+const WebhookTriggersSchema = z.object({
+	enabled: z.boolean().default(false),
+	host: z.string().default('127.0.0.1'),
+	port: z.number().int().min(1).max(65535).default(3378),
+	hooks: z.array(WebhookHookSchema).default([]),
+});
+
+const TriggersSchema = z.object({
+	fileWatchers: z.array(FileWatcherTriggerSchema).default([]),
+	webhooks: WebhookTriggersSchema.default({}),
+});
+
 const SchedulerSchema = z.object({
 	heartbeat: HeartbeatSchema.default({}),
 	maxConcurrentJobs: z.number().int().positive().default(3),
+	triggers: TriggersSchema.default({}),
+});
+
+const DaemonSchema = z.object({
+	pidFile: z.string().default('~/.mama/mama.pid'),
+	healthCheckIntervalSeconds: z.number().int().positive().default(30),
 });
 
 const ConsolidationSchema = z.object({
@@ -171,6 +203,7 @@ export const ConfigSchema = z.object({
 	channels: ChannelsSchema.default({}),
 	sandbox: SandboxSchema.default({}),
 	scheduler: SchedulerSchema.default({}),
+	daemon: DaemonSchema.default({}),
 	memory: MemorySchema.default({}),
 	logging: LoggingSchema.default({}),
 });

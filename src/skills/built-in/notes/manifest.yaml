@@ -1,0 +1,12 @@
+name: notes
+version: "1.0.0"
+description: "Note taking in ~/.mama/notes"
+capabilities:
+  - type: notes
+    actions: ["create", "list", "archive"]
+    allowPaths: ["~/.mama/notes"]
+tools:
+  - name: skill_notes_capture
+    description: Capture a new note entry
+  - name: skill_notes_list
+    description: List saved notes

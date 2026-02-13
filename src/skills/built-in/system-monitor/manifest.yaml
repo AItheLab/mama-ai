@@ -1,0 +1,9 @@
+name: system-monitor
+version: "1.0.0"
+description: "System metrics and environment checks"
+capabilities:
+  - type: system-monitor
+    actions: ["cpu", "memory", "disk", "uptime"]
+tools:
+  - name: skill_system_snapshot
+    description: Report CPU, memory, and disk usage

@@ -4,6 +4,16 @@
 
 Skills are self-contained modules that extend Mama's capabilities beyond the core tools. Each skill declares exactly what permissions it needs, and Mama enforces those boundaries at runtime.
 
+Current implementation files:
+- Loader: `src/skills/loader.ts`
+- Registry: `src/skills/registry.ts`
+- Types: `src/skills/types.ts`
+- Built-ins: `src/skills/built-in/*`
+
+Runtime location:
+- User skills directory: `~/.mama/skills/`
+- Registry persistence: `skills` table in `~/.mama/mama.db`
+
 ---
 
 ## Skill Structure
@@ -62,8 +72,13 @@ tools:
     description: "Push commits to remote"
 
 # Integrity
-checksum: "sha256:abc123..."
+checksum: "optional-if-manifest.sha256-is-present"
 ```
+
+Checksum enforcement (current):
+- Preferred: `manifest.sha256` file with SHA-256 hash of `manifest.yaml`
+- Fallback: `checksum` field in `manifest.yaml`
+- Loader rejects skills with missing/invalid checksum
 
 ### Entry Point (index.ts)
 

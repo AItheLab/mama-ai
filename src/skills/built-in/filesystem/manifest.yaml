@@ -1,0 +1,12 @@
+name: filesystem
+version: "1.0.0"
+description: "Sandboxed filesystem operations"
+capabilities:
+  - type: filesystem
+    actions: ["read", "write", "list", "delete"]
+    allowPaths: ["~/.mama", "~/Desktop"]
+tools:
+  - name: skill_filesystem_list
+    description: List files in allowed paths
+  - name: skill_filesystem_write
+    description: Write files in allowed paths

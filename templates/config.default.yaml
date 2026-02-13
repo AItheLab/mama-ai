@@ -42,10 +42,12 @@ channels:
   telegram:
     enabled: false
     bot_token: "${MAMA_TELEGRAM_TOKEN}"
+    default_chat_id: 0
   api:
     enabled: false
     host: "127.0.0.1"
     port: 3377
+    token: "${MAMA_API_TOKEN}"
 
 # Security / Sandbox
 sandbox:
@@ -75,6 +77,17 @@ scheduler:
     interval_minutes: 30
     heartbeat_file: "~/.mama/heartbeat.md"
   max_concurrent_jobs: 3
+  triggers:
+    file_watchers: []
+    webhooks:
+      enabled: false
+      host: "127.0.0.1"
+      port: 3378
+      hooks: []
+
+daemon:
+  pid_file: "~/.mama/mama.pid"
+  health_check_interval_seconds: 30
 
 # Memory
 memory:

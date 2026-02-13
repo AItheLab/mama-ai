@@ -61,6 +61,37 @@ Storage: ~/.mama/
 
 ---
 
+## Phase 4 Implementation Notes (Current)
+
+- Scheduler runtime lives in:
+  - `src/scheduler/cron.ts`
+  - `src/scheduler/heartbeat.ts`
+  - `src/scheduler/triggers.ts`
+- Channel implementations:
+  - `src/channels/telegram.ts` (HTTP polling adapter + approvals + commands)
+  - `src/channels/api.ts` (localhost bearer-auth JSON API)
+- Daemon orchestration:
+  - `src/daemon.ts`
+  - CLI wiring in `src/index.ts` (`mama daemon`, `start`, `stop`, `status`, `logs`)
+- Install/bootstrap:
+  - `scripts/install.sh`
+  - `mama init` (`src/cli/init.ts`)
+- Cost dashboard:
+  - SQLite-backed tracker in `src/llm/cost-tracker.ts`
+  - CLI command `mama cost` (`src/cli/cost.ts`)
+- Skills:
+  - Loader + registry in `src/skills/loader.ts`, `src/skills/registry.ts`
+  - Built-ins in `src/skills/built-in/*`
+
+Primary operational commands:
+- `mama chat`
+- `mama jobs list|create|enable|disable|delete`
+- `mama memory search|list|forget|consolidate|stats`
+- `mama cost --period today|week|month|all`
+- `mama daemon` / `mama daemon start|stop|status|logs`
+
+---
+
 ## Component Details
 
 ### 1. Agent Runtime

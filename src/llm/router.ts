@@ -1,4 +1,5 @@
 import type { MamaConfig } from '../config/schema.js';
+import type { MemoryStore } from '../memory/store.js';
 import { createLogger } from '../utils/logger.js';
 import { createCostTracker } from './cost-tracker.js';
 import type {
@@ -21,6 +22,7 @@ interface RouterDeps {
 	config: MamaConfig;
 	claudeProvider?: LLMProviderInterface;
 	ollamaProvider?: LLMProviderInterface;
+	usageStore?: MemoryStore;
 }
 
 function getModelForTask(
@@ -54,7 +56,7 @@ function getModelForTask(
  */
 export function createLLMRouter(deps: RouterDeps): LLMRouter {
 	const { config } = deps;
-	const costTracker = createCostTracker();
+	const costTracker = createCostTracker({ store: deps.usageStore });
 	const providers = new Map<string, LLMProviderInterface>();
 
 	if (deps.claudeProvider) providers.set('claude', deps.claudeProvider);

@@ -1,0 +1,12 @@
+name: git-manager
+version: "1.0.0"
+description: "Safe git status and diff helpers"
+capabilities:
+  - type: shell
+    actions: ["status", "log", "diff"]
+    denyPatterns: ["push --force", "reset --hard"]
+tools:
+  - name: skill_git_status
+    description: Inspect git working tree status
+  - name: skill_git_diff
+    description: Show git diff safely

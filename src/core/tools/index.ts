@@ -2,6 +2,7 @@ import type { ToolDefinition } from '../../llm/types.js';
 import { createFsTools } from './fs-tools.js';
 import { createMetaTools } from './meta-tools.js';
 import { createNetworkTools } from './network-tools.js';
+import { createSchedulerTools } from './scheduler-tools.js';
 import { createShellTools } from './shell-tools.js';
 import type { Tool, ToolContext, ToolResult } from './types.js';
 
@@ -9,6 +10,7 @@ const TOOL_REGISTRY: Tool[] = [
 	...createFsTools(),
 	...createShellTools(),
 	...createNetworkTools(),
+	...createSchedulerTools(),
 	...createMetaTools(),
 ];
 
