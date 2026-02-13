@@ -6,6 +6,7 @@ const logger = createLogger('llm:ollama');
 
 interface OllamaProviderConfig {
 	host: string;
+	apiKey?: string;
 	defaultModel: string;
 	embeddingModel: string;
 }
@@ -30,7 +31,8 @@ function convertMessages(messages: Message[]): Array<{ role: string; content: st
  * Creates an Ollama (local LLM) provider with embedding support.
  */
 export function createOllamaProvider(config: OllamaProviderConfig): OllamaProvider {
-	const client = new Ollama({ host: config.host });
+	const headers = config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : undefined;
+	const client = new Ollama({ host: config.host, headers });
 
 	async function complete(request: LLMRequest): Promise<LLMResponse> {
 		const model = request.model ?? config.defaultModel;
@@ -70,14 +72,8 @@ export function createOllamaProvider(config: OllamaProviderConfig): OllamaProvid
 				function: {
 					name: tool.name,
 					description: tool.description,
-					parameters: {
-						type: 'object' as const,
-						properties: tool.parameters as Record<
-							string,
-							{ type?: string | string[]; description?: string }
-						>,
-						required: Object.keys(tool.parameters),
-					},
+					// ToolDefinition.parameters is already a JSON Schema object.
+					parameters: tool.parameters as Record<string, unknown>,
 				},
 			}));
 		}

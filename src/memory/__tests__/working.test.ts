@@ -95,4 +95,13 @@ describe('WorkingMemory', () => {
 		expect(messages1).not.toBe(messages2);
 		expect(messages1).toEqual(messages2);
 	});
+
+	it('sets and sanitizes system memory injections', () => {
+		memory.setSystemInjection(['  user prefers coffee  ', '', 'active goal: ship docs']);
+		expect(memory.getSystemInjection()).toEqual(['user prefers coffee', 'active goal: ship docs']);
+
+		const copy = memory.getSystemInjection();
+		copy.push('mutated');
+		expect(memory.getSystemInjection()).toEqual(['user prefers coffee', 'active goal: ship docs']);
+	});
 });

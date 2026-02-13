@@ -23,6 +23,31 @@ interface RouterDeps {
 	ollamaProvider?: LLMProviderInterface;
 }
 
+function getModelForTask(
+	config: MamaConfig,
+	provider: 'claude' | 'ollama',
+	taskType: TaskType,
+): string {
+	if (provider === 'claude') {
+		return config.llm.providers.claude.defaultModel;
+	}
+
+	const ollama = config.llm.providers.ollama;
+	switch (taskType) {
+		case 'complex_reasoning':
+		case 'code_generation':
+		case 'memory_consolidation':
+			return ollama.smartModel;
+		case 'simple_tasks':
+		case 'private_content':
+			return ollama.fastModel;
+		case 'embeddings':
+			return ollama.embeddingModel;
+		default:
+			return ollama.defaultModel;
+	}
+}
+
 /**
  * Creates an LLM router that intelligently selects providers based on task type.
  * Includes fallback logic and cost tracking.
@@ -38,7 +63,7 @@ export function createLLMRouter(deps: RouterDeps): LLMRouter {
 	function route(taskType: TaskType): RoutingDecision {
 		const routing = config.llm.routing;
 
-		const routingMap: Record<string, string> = {
+		const routingMap: Record<TaskType, 'claude' | 'ollama'> = {
 			complex_reasoning: routing.complexReasoning,
 			code_generation: routing.codeGeneration,
 			simple_tasks: routing.simpleTasks,
@@ -48,16 +73,13 @@ export function createLLMRouter(deps: RouterDeps): LLMRouter {
 			general: config.llm.defaultProvider,
 		};
 
-		const provider = (routingMap[taskType] ?? config.llm.defaultProvider) as 'claude' | 'ollama';
-		const model =
-			provider === 'claude'
-				? config.llm.providers.claude.defaultModel
-				: config.llm.providers.ollama.defaultModel;
+		const provider = routingMap[taskType] ?? config.llm.defaultProvider;
+		const model = getModelForTask(config, provider, taskType);
 
 		return {
 			provider,
 			model,
-			reason: `Task type "${taskType}" routed to ${provider}`,
+			reason: `Task type "${taskType}" routed to ${provider}/${model}`,
 		};
 	}
 
@@ -65,6 +87,7 @@ export function createLLMRouter(deps: RouterDeps): LLMRouter {
 		const taskType = request.taskType ?? 'general';
 		const decision = route(taskType);
 		const startTime = Date.now();
+		let primaryError: unknown;
 
 		// Try primary provider
 		const primary = providers.get(decision.provider);
@@ -95,6 +118,7 @@ export function createLLMRouter(deps: RouterDeps): LLMRouter {
 
 				return response;
 			} catch (err) {
+				primaryError = err;
 				logger.warn('Primary provider failed, trying fallback', {
 					provider: decision.provider,
 					error: err instanceof Error ? err.message : String(err),
@@ -107,10 +131,7 @@ export function createLLMRouter(deps: RouterDeps): LLMRouter {
 		const fallback = providers.get(fallbackName);
 
 		if (fallback) {
-			const fallbackModel =
-				fallbackName === 'claude'
-					? config.llm.providers.claude.defaultModel
-					: config.llm.providers.ollama.defaultModel;
+			const fallbackModel = getModelForTask(config, fallbackName, taskType);
 
 			try {
 				const response = await fallback.complete({
@@ -140,6 +161,14 @@ export function createLLMRouter(deps: RouterDeps): LLMRouter {
 					`All LLM providers failed. Last error: ${err instanceof Error ? err.message : String(err)}`,
 				);
 			}
+		}
+
+		if (primaryError) {
+			throw new Error(
+				`Primary provider "${decision.provider}" failed and no fallback provider is configured. Last error: ${
+					primaryError instanceof Error ? primaryError.message : String(primaryError)
+				}`,
+			);
 		}
 
 		throw new Error('No LLM providers available');

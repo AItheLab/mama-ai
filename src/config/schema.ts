@@ -20,21 +20,24 @@ const ClaudeProviderSchema = z.object({
 
 const OllamaProviderSchema = z.object({
 	host: z.string().url().default('http://localhost:11434'),
-	defaultModel: z.string().default('llama3.2'),
+	apiKey: z.string().default(''),
+	defaultModel: z.string().default('minimax-m2.5:cloud'),
+	smartModel: z.string().default('minimax-m2.5:cloud'),
+	fastModel: z.string().default('gemini-3-flash-preview:cloud'),
 	embeddingModel: z.string().default('nomic-embed-text'),
 });
 
 const RoutingSchema = z.object({
-	complexReasoning: z.enum(['claude', 'ollama']).default('claude'),
-	codeGeneration: z.enum(['claude', 'ollama']).default('claude'),
+	complexReasoning: z.enum(['claude', 'ollama']).default('ollama'),
+	codeGeneration: z.enum(['claude', 'ollama']).default('ollama'),
 	simpleTasks: z.enum(['claude', 'ollama']).default('ollama'),
 	embeddings: z.enum(['claude', 'ollama']).default('ollama'),
-	memoryConsolidation: z.enum(['claude', 'ollama']).default('claude'),
+	memoryConsolidation: z.enum(['claude', 'ollama']).default('ollama'),
 	privateContent: z.enum(['claude', 'ollama']).default('ollama'),
 });
 
 const LlmSchema = z.object({
-	defaultProvider: z.enum(['claude', 'ollama']).default('claude'),
+	defaultProvider: z.enum(['claude', 'ollama']).default('ollama'),
 	providers: z
 		.object({
 			claude: ClaudeProviderSchema.default({}),
@@ -116,7 +119,7 @@ const ShellSandboxSchema = z.object({
 const NetworkSandboxSchema = z.object({
 	allowedDomains: z
 		.array(z.string())
-		.default(['api.anthropic.com', 'api.telegram.org', 'localhost', 'api.github.com']),
+		.default(['ollama.com', 'api.telegram.org', 'localhost', 'api.github.com']),
 	askDomains: z.boolean().default(true),
 	rateLimitPerMinute: z.number().int().positive().default(30),
 	logAllRequests: z.boolean().default(true),
@@ -143,7 +146,7 @@ const ConsolidationSchema = z.object({
 	enabled: z.boolean().default(true),
 	intervalHours: z.number().positive().default(6),
 	minEpisodesToConsolidate: z.number().int().positive().default(10),
-	model: z.enum(['claude', 'ollama']).default('claude'),
+	model: z.enum(['claude', 'ollama']).default('ollama'),
 });
 
 const MemorySchema = z.object({

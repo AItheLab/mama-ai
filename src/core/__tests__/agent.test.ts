@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { LLMRequest, LLMResponse } from '../../llm/types.js';
+import type { EpisodicMemory } from '../../memory/episodic.js';
 import { createSoul } from '../../memory/soul.js';
 import { createWorkingMemory } from '../../memory/working.js';
 import { createAgent } from '../agent.js';
@@ -116,5 +117,77 @@ describe('Agent', () => {
 
 		agent.clearHistory();
 		expect(agent.getConversationHistory()).toHaveLength(0);
+	});
+
+	it('stores user and assistant messages in episodic memory', async () => {
+		const router = createMockRouter();
+		const episodicMemory = {
+			storeEpisode: vi.fn(async () => 'episode-id'),
+		} as unknown as EpisodicMemory;
+		const agent = createAgent({
+			router,
+			workingMemory: createWorkingMemory({ maxTokens: 4000 }),
+			soul: createSoul({
+				soulPath: '/nonexistent',
+				userName: 'Alex',
+				agentName: 'Mama',
+			}),
+			episodicMemory,
+		});
+
+		await agent.processMessage('Remember this context', 'terminal');
+
+		expect(episodicMemory.storeEpisode).toHaveBeenCalledTimes(2);
+		expect(episodicMemory.storeEpisode).toHaveBeenNthCalledWith(
+			1,
+			expect.objectContaining({
+				role: 'user',
+				content: 'Remember this context',
+				channel: 'terminal',
+			}),
+		);
+		expect(episodicMemory.storeEpisode).toHaveBeenNthCalledWith(
+			2,
+			expect.objectContaining({
+				role: 'assistant',
+				content: 'Hello! How can I help you?',
+				channel: 'terminal',
+			}),
+		);
+	});
+
+	it('injects retrieved memory context into the system prompt', async () => {
+		const router = createMockRouter();
+		const retrieval = {
+			retrieveContext: vi.fn(async () => ({
+				entries: ['[memory/fact/c=0.90] User works with TypeScript daily'],
+				formatted: '[memory/fact/c=0.90] User works with TypeScript daily',
+				tokenCount: 12,
+				stats: {
+					tokenBudget: 1200,
+					candidates: 1,
+					included: 1,
+					memories: 1,
+					episodes: 0,
+					goals: 0,
+				},
+			})),
+		};
+
+		const agent = createAgent({
+			router,
+			workingMemory: createWorkingMemory({ maxTokens: 4000 }),
+			soul: createSoul({
+				soulPath: '/nonexistent',
+				userName: 'Alex',
+				agentName: 'Mama',
+			}),
+			retrieval,
+		});
+		await agent.processMessage('What should I focus on?', 'terminal');
+
+		expect(retrieval.retrieveContext).toHaveBeenCalledWith('What should I focus on?', 1200);
+		const request = router.complete.mock.calls[0]?.[0];
+		expect(request.systemPrompt).toContain('[memory/fact/c=0.90] User works with TypeScript daily');
 	});
 });

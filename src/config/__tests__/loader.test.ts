@@ -24,7 +24,7 @@ describe('loadConfig', () => {
 		if (result.ok) {
 			expect(result.value.version).toBe(1);
 			expect(result.value.agent.name).toBe('Mama');
-			expect(result.value.llm.defaultProvider).toBe('claude');
+			expect(result.value.llm.defaultProvider).toBe('ollama');
 			expect(result.value.logging.level).toBe('info');
 		}
 	});

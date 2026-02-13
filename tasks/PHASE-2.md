@@ -1,5 +1,9 @@
 # Phase 2: Hands — Detailed Tasks
 
+## Status
+- Completed on February 13, 2026.
+- Tasks 2.1 to 2.8 implemented and validated in CI-local checks (`typecheck`, `test:run`, `lint`).
+
 ## Prerequisites
 - Phase 1 complete and passing
 - Agent can chat in terminal

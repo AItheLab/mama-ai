@@ -16,22 +16,23 @@ user:
 
 # LLM providers
 llm:
-  default_provider: "claude"
+  default_provider: "ollama"
   providers:
-    claude:
-      api_key: "${MAMA_CLAUDE_API_KEY}"
-      default_model: "claude-sonnet-4-20250514"
-      max_monthly_budget_usd: 50
     ollama:
       host: "http://localhost:11434"
-      default_model: "llama3.2"
+      # Local cloud mode: run `ollama signin` and keep localhost host.
+      # Direct cloud API mode: set host to "https://ollama.com" and OLLAMA_API_KEY.
+      api_key: "${OLLAMA_API_KEY}"
+      default_model: "minimax-m2.5:cloud"
+      smart_model: "minimax-m2.5:cloud"
+      fast_model: "gemini-3-flash-preview:cloud"
       embedding_model: "nomic-embed-text"
   routing:
-    complex_reasoning: "claude"
-    code_generation: "claude"
+    complex_reasoning: "ollama"
+    code_generation: "ollama"
     simple_tasks: "ollama"
     embeddings: "ollama"
-    memory_consolidation: "claude"
+    memory_consolidation: "ollama"
     private_content: "ollama"
 
 # Channels
@@ -62,7 +63,7 @@ sandbox:
     ask_commands: ["git commit", "git push", "mkdir", "cp", "mv"]
     denied_patterns: ["rm -rf", "sudo", "curl | bash"]
   network:
-    allowed_domains: ["api.anthropic.com", "api.telegram.org", "localhost"]
+    allowed_domains: ["ollama.com", "api.telegram.org", "localhost"]
     ask_domains: true
     rate_limit_per_minute: 30
     log_all_requests: true
@@ -81,7 +82,7 @@ memory:
     enabled: true
     interval_hours: 6
     min_episodes_to_consolidate: 10
-    model: "claude"
+    model: "ollama"
   max_episodic_entries: 100000
   embedding_dimensions: 768
   search_top_k: 10

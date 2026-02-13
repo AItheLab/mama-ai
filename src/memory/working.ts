@@ -29,6 +29,7 @@ interface WorkingMemory {
 	getMessages(): Message[];
 	getTokenCount(): number;
 	compress(summarizer: (messages: Message[]) => Promise<string>): Promise<void>;
+	setSystemInjection(entries: string[]): void;
 	clear(): void;
 	getSystemInjection(): string[];
 }
@@ -105,6 +106,16 @@ export function createWorkingMemory(options: WorkingMemoryOptions): WorkingMemor
 		totalTokens = 0;
 	}
 
+	function setSystemInjection(entries: string[]): void {
+		memoryInjections.length = 0;
+		for (const entry of entries) {
+			const trimmed = entry.trim();
+			if (trimmed.length > 0) {
+				memoryInjections.push(trimmed);
+			}
+		}
+	}
+
 	function getSystemInjection(): string[] {
 		return [...memoryInjections];
 	}
@@ -114,6 +125,7 @@ export function createWorkingMemory(options: WorkingMemoryOptions): WorkingMemor
 		getMessages,
 		getTokenCount,
 		compress,
+		setSystemInjection,
 		clear,
 		getSystemInjection,
 	};

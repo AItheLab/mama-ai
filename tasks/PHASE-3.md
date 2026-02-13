@@ -1,5 +1,34 @@
 # Phase 3: Brain — Detailed Tasks
 
+## Status
+- In progress as of February 13, 2026.
+- Kickoff started with Task 3.1 (database store + migrations + tests).
+- Task 3.2 completed on February 13, 2026:
+  - `embeddings.ts` with cache (`embed`, `embedBatch`)
+  - `episodic.ts` with store/search/recent/consolidation operations
+  - Agent integration to persist user/assistant/tool/system episodes
+  - Tests added for embeddings, episodic memory, and agent episodic writes
+- Task 3.3 completed on February 13, 2026:
+  - `consolidated.ts` implemented (create/update/reinforce/deactivate/reactivate/search/getByCategory/getActive)
+  - Migration `002_memories_reinforcement.sql` added for reinforcement metadata
+  - Tests added for CRUD, reinforcement, activation toggles, and search relevance
+- Task 3.4 completed on February 13, 2026:
+  - `consolidation.ts` engine + scheduler implemented
+  - `decay.ts` implemented and wired into consolidation
+  - `soul.ts` regeneration from consolidated memories added
+  - Runtime integration and tests added for consolidation/decay/soul updates
+- Task 3.5 completed on February 13, 2026:
+  - `retrieval.ts` implemented (semantic memories + recent episodes + active goals + ranking + token budget)
+  - Agent integration added to inject retrieved context into system prompt
+  - Tests added for retrieval relevance, token budget handling, and confidence prioritization
+- Task 3.6 completed on February 13, 2026:
+  - CLI commands added: `mama memory search/list/forget/consolidate/stats`
+  - Pretty output formatting with colorized sections and concise metadata
+  - Tests added for command handlers and memory operation behavior
+- Task 3.7 completed on February 13, 2026:
+  - End-to-end integration scenarios added for episodic store/search, consolidation, retrieval injection, knowledge recall, and decay
+  - Integration test file: `tests/phase3-integration.test.ts`
+
 ## Prerequisites
 - Phase 2 complete
 - Agent can act through sandbox

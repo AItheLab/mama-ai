@@ -4,6 +4,12 @@
 
 4 phases, each producing a working, testable increment. Phase 1 is the foundation — nothing works without it. Each subsequent phase adds a layer of capability.
 
+Current status (February 13, 2026):
+- Phase 1: Complete
+- Phase 2: Complete
+- Phase 3: Complete
+- Phase 4: Pending
+
 ```
 Phase 1: Foundation          (Week 1-2)  → Agent that thinks and talks
 Phase 2: Hands                (Week 2-3)  → Agent that acts (sandbox + tools)
