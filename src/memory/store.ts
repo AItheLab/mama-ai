@@ -1,11 +1,15 @@
 import { mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
-import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
+import type { DatabaseSync as NodeDatabaseSync, SQLInputValue } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { getMamaHome } from '../config/defaults.js';
 import { createLogger } from '../utils/logger.js';
 
 const logger = createLogger('memory:store');
+const nodeRequire = createRequire(import.meta.url);
+const { DatabaseSync } = nodeRequire('node:sqlite') as typeof import('node:sqlite');
+type DatabaseSync = NodeDatabaseSync;
 
 export interface AppliedMigration {
 	version: number;

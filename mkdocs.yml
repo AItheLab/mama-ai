@@ -1,0 +1,32 @@
+site_name: Mama Documentation
+site_description: Operational and technical documentation for Mama AI Agent
+site_url: https://example.com/mama-docs
+
+theme:
+  name: material
+  language: en
+  features:
+    - navigation.sections
+    - navigation.expand
+    - toc.integrate
+    - search.suggest
+    - search.highlight
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+  - tables
+  - fenced_code
+  - attr_list
+
+nav:
+  - Home: index.md
+  - Operations (24/7): OPERATIONS-AND-DEPLOYMENT.md
+  - Architecture: ARCHITECTURE.md
+  - Security: SECURITY.md
+  - Memory: MEMORY.md
+  - Skills: SKILLS.md
+  - Agent Loop: AGENT-LOOP.md
+  - Workflow: AGENTS-WORKFLOW.md
+
