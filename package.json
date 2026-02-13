@@ -1,0 +1,52 @@
+{
+  "name": "mama-agent",
+  "version": "0.1.0",
+  "description": "Personal AI Agent — Secure. Intelligent. Actually useful.",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "mama": "dist/index.js"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsup",
+    "start": "node dist/index.js",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check src/",
+    "lint:fix": "biome check --write src/"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "personal-assistant"
+  ],
+  "author": "Alex (AleksandarLabs)",
+  "license": "MIT",
+  "packageManager": "pnpm@10.24.0",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.74.0",
+    "better-sqlite3": "^12.6.2",
+    "commander": "^14.0.3",
+    "ink": "^6.7.0",
+    "ink-text-input": "^6.0.0",
+    "node-cron": "^4.2.1",
+    "ollama": "^0.6.3",
+    "react": "^19.2.4",
+    "typescript": "^5.9.3",
+    "uuid": "^13.0.0",
+    "yaml": "^2.8.2",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.3.15",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^25.2.3",
+    "@types/react": "^19.2.14",
+    "@types/uuid": "^11.0.0",
+    "tsup": "^8.5.1",
+    "tsx": "^4.21.0",
+    "vitest": "^4.0.18"
+  }
+}

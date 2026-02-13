@@ -1,0 +1,94 @@
+# Mama Configuration
+# See docs/ARCHITECTURE.md for full reference
+version: 1
+
+# Agent identity
+agent:
+  name: "Mama"
+  soul_path: "./soul.md"
+
+# User info
+user:
+  name: "Alex"
+  telegram_ids: []
+  timezone: "Europe/Madrid"
+  locale: "es-ES"
+
+# LLM providers
+llm:
+  default_provider: "claude"
+  providers:
+    claude:
+      api_key: "${MAMA_CLAUDE_API_KEY}"
+      default_model: "claude-sonnet-4-20250514"
+      max_monthly_budget_usd: 50
+    ollama:
+      host: "http://localhost:11434"
+      default_model: "llama3.2"
+      embedding_model: "nomic-embed-text"
+  routing:
+    complex_reasoning: "claude"
+    code_generation: "claude"
+    simple_tasks: "ollama"
+    embeddings: "ollama"
+    memory_consolidation: "claude"
+    private_content: "ollama"
+
+# Channels
+channels:
+  terminal:
+    enabled: true
+  telegram:
+    enabled: false
+    bot_token: "${MAMA_TELEGRAM_TOKEN}"
+  api:
+    enabled: false
+    host: "127.0.0.1"
+    port: 3377
+
+# Security / Sandbox
+sandbox:
+  filesystem:
+    workspace: "~/.mama/workspace"
+    allowed_paths:
+      - path: "~/.mama/**"
+        actions: ["read", "write", "list"]
+        level: "auto"
+    denied_paths:
+      - "~/.ssh/**"
+      - "~/.gnupg/**"
+  shell:
+    safe_commands: ["ls", "cat", "head", "tail", "grep", "find", "wc", "date", "whoami", "pwd", "echo"]
+    ask_commands: ["git commit", "git push", "mkdir", "cp", "mv"]
+    denied_patterns: ["rm -rf", "sudo", "curl | bash"]
+  network:
+    allowed_domains: ["api.anthropic.com", "api.telegram.org", "localhost"]
+    ask_domains: true
+    rate_limit_per_minute: 30
+    log_all_requests: true
+
+# Scheduler
+scheduler:
+  heartbeat:
+    enabled: true
+    interval_minutes: 30
+    heartbeat_file: "~/.mama/heartbeat.md"
+  max_concurrent_jobs: 3
+
+# Memory
+memory:
+  consolidation:
+    enabled: true
+    interval_hours: 6
+    min_episodes_to_consolidate: 10
+    model: "claude"
+  max_episodic_entries: 100000
+  embedding_dimensions: 768
+  search_top_k: 10
+
+# Logging
+logging:
+  level: "info"
+  file: "~/.mama/logs/mama.log"
+  max_size_mb: 50
+  rotate: true
