@@ -42,4 +42,54 @@ describe('CostTracker persistence', () => {
 		expect(tracker2.getTotalCost()).toBeGreaterThan(0);
 		store2.close();
 	});
+
+	it('does not reuse colliding ids when existing usage ids are non-contiguous', () => {
+		const dbPath = createTempDbPath();
+		const store = createMemoryStore({ dbPath });
+
+		store.run(
+			`INSERT INTO llm_usage (id, timestamp, provider, model, input_tokens, output_tokens, cost_usd, task_type, latency_ms)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			[
+				'usage-1',
+				'2026-02-13T00:00:00.000Z',
+				'ollama',
+				'minimax-m2.5:cloud',
+				100,
+				50,
+				0,
+				'general',
+				10,
+			],
+		);
+		store.run(
+			`INSERT INTO llm_usage (id, timestamp, provider, model, input_tokens, output_tokens, cost_usd, task_type, latency_ms)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			[
+				'usage-3',
+				'2026-02-13T01:00:00.000Z',
+				'ollama',
+				'minimax-m2.5:cloud',
+				120,
+				60,
+				0,
+				'general',
+				12,
+			],
+		);
+
+		const tracker = createCostTracker({ store });
+		expect(() =>
+			tracker.record({
+				provider: 'ollama',
+				model: 'minimax-m2.5:cloud',
+				usage: { inputTokens: 140, outputTokens: 70 },
+				taskType: 'general',
+				latencyMs: 14,
+			}),
+		).not.toThrow();
+
+		expect(store.all('SELECT id FROM llm_usage')).toHaveLength(3);
+		store.close();
+	});
 });

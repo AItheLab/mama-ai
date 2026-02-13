@@ -1,3 +1,4 @@
+import { v4 as uuidv4 } from 'uuid';
 import type { MemoryStore } from '../memory/store.js';
 import { createLogger } from '../utils/logger.js';
 import type { LLMProvider, LLMUsageRecord, TaskType, TokenUsage } from './types.js';
@@ -127,7 +128,6 @@ function estimateAverageCostPerDay(entries: LLMUsageRecord[]): number {
 export function createCostTracker(options: CostTrackerOptions = {}): CostTracker {
 	const records: LLMUsageRecord[] = [];
 	const clock = options.clock ?? (() => new Date());
-	let idCounter = 0;
 
 	if (options.store) {
 		const rows = options.store.all<UsageRow>(
@@ -138,7 +138,6 @@ export function createCostTracker(options: CostTrackerOptions = {}): CostTracker
 		for (const row of rows) {
 			records.push(parseUsageRow(row));
 		}
-		idCounter = rows.length;
 	}
 
 	function persist(entry: LLMUsageRecord): void {
@@ -168,10 +167,9 @@ export function createCostTracker(options: CostTrackerOptions = {}): CostTracker
 		latencyMs: number;
 	}): LLMUsageRecord {
 		const costUsd = getCostForModel(params.model, params.usage);
-		idCounter++;
 
 		const entry: LLMUsageRecord = {
-			id: `usage-${idCounter}`,
+			id: uuidv4(),
 			timestamp: clock(),
 			provider: params.provider,
 			model: params.model,
@@ -238,7 +236,6 @@ export function createCostTracker(options: CostTrackerOptions = {}): CostTracker
 
 	function clear(): void {
 		records.length = 0;
-		idCounter = 0;
 		if (options.store) {
 			options.store.run('DELETE FROM llm_usage');
 		}
