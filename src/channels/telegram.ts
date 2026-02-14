@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -328,7 +329,7 @@ export function createTelegramChannel(options: TelegramChannelOptions): Telegram
 			const chatId = chatByUser.get(options.allowedUserIds[0] ?? -1);
 			if (!chatId) return false;
 
-			const id = Math.random().toString(36).slice(2, 10);
+			const id = randomBytes(8).toString('hex');
 			await options.adapter.sendMessage(chatId, renderApprovalMessage(request), {
 				replyMarkup: {
 					inline_keyboard: [

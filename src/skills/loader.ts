@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
@@ -54,15 +54,24 @@ function computeChecksum(value: string): string {
 	return createHash('sha256').update(value).digest('hex');
 }
 
-function readExpectedChecksum(skillDir: string, manifest: SkillManifest): string {
+function constantTimeHashEqual(a: string, b: string): boolean {
+	const bufA = Buffer.from(a, 'utf-8');
+	const bufB = Buffer.from(b, 'utf-8');
+	if (bufA.length !== bufB.length) {
+		timingSafeEqual(bufA, bufA);
+		return false;
+	}
+	return timingSafeEqual(bufA, bufB);
+}
+
+function readExpectedChecksum(skillDir: string): string {
 	const filePath = join(skillDir, 'manifest.sha256');
 	if (existsSync(filePath)) {
 		const raw = readFileSync(filePath, 'utf-8').trim();
 		return raw.split(/\s+/)[0] ?? raw;
 	}
-	if (manifest.checksum) return manifest.checksum;
 	throw new Error(
-		`Missing checksum for skill at ${skillDir}. Add manifest.sha256 or checksum in manifest.`,
+		`Missing checksum for skill at ${skillDir}. Add a manifest.sha256 file.`,
 	);
 }
 
@@ -120,8 +129,8 @@ export function createSkillLoader(options: CreateSkillLoaderOptions = {}): Skill
 		const manifestRaw = readFileSync(manifestPath, 'utf-8');
 		const manifest = validateManifest(parseYaml(manifestRaw), skillDir);
 		const checksum = computeChecksum(manifestRaw);
-		const expectedChecksum = readExpectedChecksum(skillDir, manifest);
-		if (checksum !== expectedChecksum) {
+		const expectedChecksum = readExpectedChecksum(skillDir);
+		if (!constantTimeHashEqual(checksum, expectedChecksum)) {
 			throw new Error(`Checksum mismatch for skill "${manifest.name}"`);
 		}
 

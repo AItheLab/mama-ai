@@ -1,6 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { LogLevel } from '../config/schema.js';
+import { redactSecretsInValue } from './secret-redaction.js';
 
 const LOG_LEVELS: Record<LogLevel, number> = {
 	debug: 0,
@@ -58,10 +59,12 @@ function formatForStderr(entry: LogEntry): string {
 }
 
 function writeLog(entry: LogEntry): void {
+	const safeEntry = redactSecretsInValue(entry) as LogEntry;
+
 	// Write JSON to file
 	if (_globalOptions.filePath) {
 		try {
-			appendFileSync(_globalOptions.filePath, `${JSON.stringify(entry)}\n`);
+			appendFileSync(_globalOptions.filePath, `${JSON.stringify(safeEntry)}\n`);
 		} catch {
 			// Silently fail file logging — don't crash the agent
 		}
@@ -69,7 +72,7 @@ function writeLog(entry: LogEntry): void {
 
 	// Pretty print to stderr (unless silent)
 	if (!_globalOptions.silent) {
-		const formatted = formatForStderr(entry);
+		const formatted = formatForStderr(safeEntry);
 		process.stderr.write(`${formatted}\n`);
 	}
 }

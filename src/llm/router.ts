@@ -85,14 +85,31 @@ export function createLLMRouter(deps: RouterDeps): LLMRouter {
 		};
 	}
 
+	function isBudgetExceeded(): boolean {
+		const budget = config.llm.providers.claude.maxMonthlyBudgetUsd;
+		if (!budget || budget <= 0) return false;
+		const monthCost = costTracker.getCostThisMonth();
+		return monthCost >= budget;
+	}
+
 	async function complete(request: LLMRequest): Promise<LLMResponse> {
 		const taskType = request.taskType ?? 'general';
 		const decision = route(taskType);
 		const startTime = Date.now();
 		let primaryError: unknown;
 
+		// Enforce monthly budget for paid providers
+		if (decision.provider === 'claude' && isBudgetExceeded()) {
+			logger.warn('Monthly budget exceeded, blocking Claude request', {
+				budget: config.llm.providers.claude.maxMonthlyBudgetUsd,
+				currentCost: costTracker.getCostThisMonth(),
+			});
+			// Fall through to fallback provider instead of throwing immediately
+			primaryError = new Error('Monthly budget exceeded');
+		}
+
 		// Try primary provider
-		const primary = providers.get(decision.provider);
+		const primary = !primaryError ? providers.get(decision.provider) : undefined;
 		if (primary) {
 			try {
 				const response = await primary.complete({
@@ -130,7 +147,8 @@ export function createLLMRouter(deps: RouterDeps): LLMRouter {
 
 		// Fallback to the other provider
 		const fallbackName = decision.provider === 'claude' ? 'ollama' : 'claude';
-		const fallback = providers.get(fallbackName);
+		const fallbackBlocked = fallbackName === 'claude' && isBudgetExceeded();
+		const fallback = fallbackBlocked ? undefined : providers.get(fallbackName);
 
 		if (fallback) {
 			const fallbackModel = getModelForTask(config, fallbackName, taskType);

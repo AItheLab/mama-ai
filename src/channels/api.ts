@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { createAgent } from '../core/agent.js';
 import type { createAuditStore } from '../sandbox/audit.js';
@@ -8,6 +8,8 @@ import type { Channel } from './types.js';
 
 const logger = createLogger('channel:api');
 const MAX_REQUEST_BODY_BYTES = 256 * 1024;
+const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;
+const DEFAULT_RATE_LIMIT_MAX = 60;
 
 interface ApiRequest {
 	method: string;
@@ -92,6 +94,45 @@ function extractBearerToken(header: string | undefined): string | null {
 	return trimmed.slice(7).trim();
 }
 
+function constantTimeEqual(a: string, b: string): boolean {
+	const bufA = Buffer.from(a);
+	const bufB = Buffer.from(b);
+	if (bufA.length !== bufB.length) {
+		timingSafeEqual(bufA, bufA);
+		return false;
+	}
+	return timingSafeEqual(bufA, bufB);
+}
+
+interface RateLimiter {
+	check(key: string): { allowed: boolean; retryAfterMs: number };
+}
+
+function createRateLimiter(windowMs: number, maxRequests: number): RateLimiter {
+	const hits = new Map<string, number[]>();
+
+	return {
+		check(key: string): { allowed: boolean; retryAfterMs: number } {
+			const now = Date.now();
+			const windowStart = now - windowMs;
+			const timestamps = (hits.get(key) ?? []).filter((t) => t > windowStart);
+			if (timestamps.length >= maxRequests) {
+				const oldest = timestamps[0] ?? now;
+				return { allowed: false, retryAfterMs: oldest + windowMs - now };
+			}
+			timestamps.push(now);
+			hits.set(key, timestamps);
+			return { allowed: true, retryAfterMs: 0 };
+		},
+	};
+}
+
+function setSecurityHeaders(res: ServerResponse): void {
+	res.setHeader('x-content-type-options', 'nosniff');
+	res.setHeader('x-frame-options', 'DENY');
+	res.setHeader('cache-control', 'no-store');
+}
+
 function isLocalhostHost(host: string): boolean {
 	return host === '127.0.0.1' || host === 'localhost';
 }
@@ -107,7 +148,7 @@ export function createApiRequestHandler(options: {
 }) {
 	return async function handle(request: ApiRequest): Promise<ApiResponse> {
 		const authToken = extractBearerToken(request.headers.authorization);
-		if (authToken !== options.token) {
+		if (!authToken || !constantTimeEqual(authToken, options.token)) {
 			return { status: 401, body: { error: 'Unauthorized' } };
 		}
 
@@ -206,16 +247,27 @@ export function createApiChannel(options: ApiChannelOptions): ApiChannel {
 	});
 	let server: Server | null = null;
 	let boundPort: number | null = null;
+	const rateLimiter = createRateLimiter(DEFAULT_RATE_LIMIT_WINDOW_MS, DEFAULT_RATE_LIMIT_MAX);
 
 	return {
 		name: 'api',
 		async start(): Promise<void> {
 			server = createServer(async (req, res) => {
+				setSecurityHeaders(res);
 				try {
 					if (!req.url || !req.method) {
 						json(res, 404, { error: 'Not found' });
 						return;
 					}
+
+					const clientIp = req.socket.remoteAddress ?? 'unknown';
+					const rateCheck = rateLimiter.check(clientIp);
+					if (!rateCheck.allowed) {
+						res.setHeader('retry-after', String(Math.ceil(rateCheck.retryAfterMs / 1000)));
+						json(res, 429, { error: 'Too many requests' });
+						return;
+					}
+
 					const parsed = new URL(req.url, `http://${options.host}:${options.port}`);
 					const response = await handler({
 						method: req.method,
@@ -228,9 +280,10 @@ export function createApiChannel(options: ApiChannelOptions): ApiChannel {
 					});
 					json(res, response.status, response.body);
 				} catch (error) {
-					json(res, 500, {
+					logger.error('API request error', {
 						error: error instanceof Error ? error.message : String(error),
 					});
+					json(res, 500, { error: 'Internal server error' });
 				}
 			});
 

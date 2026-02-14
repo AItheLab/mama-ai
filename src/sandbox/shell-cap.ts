@@ -1,4 +1,6 @@
 import { execFile } from 'node:child_process';
+import { existsSync, realpathSync, statSync } from 'node:fs';
+import { resolve as resolvePath } from 'node:path';
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '../utils/logger.js';
 import { redactSecrets } from '../utils/secret-redaction.js';
@@ -435,10 +437,27 @@ export function createShellCapability(config: ShellSandboxConfig): Capability {
 			};
 		}
 
+		// Validate and resolve cwd to prevent symlink-based escapes
+		let resolvedCwd: string | undefined;
+		if (cwd) {
+			try {
+				const absoluteCwd = resolvePath(cwd);
+				if (!existsSync(absoluteCwd) || !statSync(absoluteCwd).isDirectory()) {
+					const entry = createErrorAuditEntry(action, redactedCommand, `Invalid cwd: not a directory`);
+					return { success: false, output: null, error: 'Invalid cwd: not a directory', auditEntry: entry, durationMs: 0 };
+				}
+				resolvedCwd = realpathSync(absoluteCwd);
+			} catch (err: unknown) {
+				const msg = err instanceof Error ? err.message : 'Failed to resolve cwd';
+				const entry = createErrorAuditEntry(action, redactedCommand, msg);
+				return { success: false, output: null, error: msg, auditEntry: entry, durationMs: 0 };
+			}
+		}
+
 		const startTime = Date.now();
 
 		try {
-			const result = await executeShellCommand(command, { cwd, timeout });
+			const result = await executeShellCommand(command, { cwd: resolvedCwd, timeout });
 			const redactedResult = {
 				stdout: redactSecrets(result.stdout),
 				stderr: redactSecrets(result.stderr),

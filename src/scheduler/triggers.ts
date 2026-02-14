@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto';
 import { type FSWatcher, watch } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { createLogger } from '../utils/logger.js';
@@ -5,6 +6,8 @@ import type { JobRunResult } from './types.js';
 
 const logger = createLogger('scheduler:triggers');
 const MAX_WEBHOOK_BODY_BYTES = 256 * 1024;
+const WEBHOOK_RATE_LIMIT_WINDOW_MS = 60_000;
+const WEBHOOK_RATE_LIMIT_MAX = 30;
 
 type FileWatcherEvent = 'add' | 'change' | 'unlink' | 'rename';
 
@@ -69,6 +72,16 @@ interface WebhookDispatchResponse {
 	body: { error?: string; accepted?: boolean };
 }
 
+function constantTimeEqual(a: string, b: string): boolean {
+	const bufA = Buffer.from(a);
+	const bufB = Buffer.from(b);
+	if (bufA.length !== bufB.length) {
+		timingSafeEqual(bufA, bufA);
+		return false;
+	}
+	return timingSafeEqual(bufA, bufB);
+}
+
 function eventMatches(eventType: string, configured: FileWatcherEvent[]): boolean {
 	if (eventType === 'change') {
 		return configured.includes('change');
@@ -101,6 +114,35 @@ async function readBody(req: IncomingMessage): Promise<string> {
 		chunks.push(buf);
 	}
 	return Buffer.concat(chunks).toString('utf-8');
+}
+
+interface RateLimiter {
+	check(key: string): { allowed: boolean; retryAfterMs: number };
+}
+
+function createRateLimiter(windowMs: number, maxRequests: number): RateLimiter {
+	const hits = new Map<string, number[]>();
+
+	return {
+		check(key: string): { allowed: boolean; retryAfterMs: number } {
+			const now = Date.now();
+			const windowStart = now - windowMs;
+			const timestamps = (hits.get(key) ?? []).filter((t) => t > windowStart);
+			if (timestamps.length >= maxRequests) {
+				const oldest = timestamps[0] ?? now;
+				return { allowed: false, retryAfterMs: oldest + windowMs - now };
+			}
+			timestamps.push(now);
+			hits.set(key, timestamps);
+			return { allowed: true, retryAfterMs: 0 };
+		},
+	};
+}
+
+function setSecurityHeaders(res: ServerResponse): void {
+	res.setHeader('x-content-type-options', 'nosniff');
+	res.setHeader('x-frame-options', 'DENY');
+	res.setHeader('cache-control', 'no-store');
 }
 
 function json(res: ServerResponse, statusCode: number, payload: unknown): void {
@@ -148,7 +190,7 @@ export function createWebhookRequestHandler(options: {
 
 		const header = request.authorizationHeader ?? '';
 		const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
-		if (!token || token !== hook.token) {
+		if (!token || !constantTimeEqual(token, hook.token)) {
 			return { status: 401, body: { error: 'Unauthorized' } };
 		}
 
@@ -213,12 +255,24 @@ export function createTriggerEngine(options: CreateTriggerEngineOptions): Trigge
 			runTask: options.runTask,
 		});
 
+		const rateLimiter = createRateLimiter(WEBHOOK_RATE_LIMIT_WINDOW_MS, WEBHOOK_RATE_LIMIT_MAX);
+
 		server = createServer(async (req, res) => {
+			setSecurityHeaders(res);
 			try {
 				if (!req.url || !req.method) {
 					json(res, 404, { error: 'Not found' });
 					return;
 				}
+
+				const clientIp = req.socket.remoteAddress ?? 'unknown';
+				const rateCheck = rateLimiter.check(clientIp);
+				if (!rateCheck.allowed) {
+					res.setHeader('retry-after', String(Math.ceil(rateCheck.retryAfterMs / 1000)));
+					json(res, 429, { error: 'Too many requests' });
+					return;
+				}
+
 				const body = await readBody(req);
 				const result = await handler({
 					method: req.method,
@@ -228,9 +282,10 @@ export function createTriggerEngine(options: CreateTriggerEngineOptions): Trigge
 				});
 				json(res, result.status, result.body);
 			} catch (error) {
-				json(res, 500, {
+				logger.error('Webhook request error', {
 					error: error instanceof Error ? error.message : String(error),
 				});
+				json(res, 500, { error: 'Internal server error' });
 			}
 		});
 

@@ -134,18 +134,32 @@ function truncateOutput(value: string, maxBytes: number): string {
 
 /**
  * Detects suspicious path traversal.
- * If the raw path contains `..` segments and the resolved path escapes what
- * we would expect from the raw path's starting directory, flag it.
+ * Checks for `..` segments that escape the starting directory, and for
+ * null bytes which can truncate paths in some environments.
  */
 function isPathTraversal(rawPath: string, resolvedPath: string, homePath: string): boolean {
+	// Null bytes can truncate paths in some C-level APIs
+	if (rawPath.includes('\0')) {
+		return true;
+	}
+
 	if (!rawPath.includes('..')) {
 		return false;
 	}
+
 	// Expand tilde in the raw path to get the "intended" starting point
 	const expanded = expandTilde(rawPath, homePath);
-	// The resolved path should be a descendant of the raw path's parent directory
-	const expectedParent = path.dirname(path.resolve(expanded.split('..')[0] ?? expanded));
-	// If the resolved path is not under the expected parent, it's suspicious
+
+	// Split on path separator to find actual `..` segments (not substrings like `file..txt`)
+	const segments = expanded.split(path.sep);
+	const hasTraversalSegment = segments.some((seg) => seg === '..');
+	if (!hasTraversalSegment) {
+		return false;
+	}
+
+	// The resolved path should be a descendant of the raw path's first non-traversal parent
+	const firstPart = expanded.split(`${path.sep}..`)[0] ?? expanded;
+	const expectedParent = path.dirname(path.resolve(firstPart));
 	if (!resolvedPath.startsWith(expectedParent)) {
 		return true;
 	}
