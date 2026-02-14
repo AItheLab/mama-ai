@@ -72,7 +72,7 @@ const ChannelsSchema = z.object({
 
 const FsPathPermission = z.object({
 	path: z.string(),
-	actions: z.array(z.enum(['read', 'write', 'list', 'delete'])),
+	actions: z.array(z.enum(['read', 'write', 'list', 'delete', 'search', 'move'])),
 	level: z.enum(['auto', 'ask', 'deny']),
 });
 
@@ -85,28 +85,15 @@ const FilesystemSandboxSchema = z.object({
 const ShellSandboxSchema = z.object({
 	safeCommands: z
 		.array(z.string())
-		.default([
-			'ls',
-			'cat',
-			'head',
-			'tail',
-			'grep',
-			'find',
-			'wc',
-			'date',
-			'whoami',
-			'pwd',
-			'echo',
-			'git status',
-			'git log',
-			'git diff',
-		]),
+		.default(['ls', 'wc', 'date', 'whoami', 'pwd', 'echo', 'git status', 'git log', 'git diff']),
 	askCommands: z
 		.array(z.string())
 		.default(['git commit', 'git push', 'git pull', 'mkdir', 'cp', 'mv', 'npm', 'pnpm', 'node']),
 	deniedPatterns: z
 		.array(z.string())
 		.default([
+			'env',
+			'printenv',
 			'rm -rf',
 			'sudo',
 			'curl | bash',

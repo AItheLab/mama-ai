@@ -108,6 +108,35 @@ describe('createTelegramChannel', () => {
 		expect(mock.sent.every((entry) => entry.text.length <= 4096)).toBe(true);
 	});
 
+	it('redacts secrets from outgoing Telegram messages', async () => {
+		const mock = createMockAdapter();
+		const secret = '123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567';
+		const agent = {
+			processMessage: vi.fn(async () => ({
+				content: `Token leaked? MAMA_TELEGRAM_TOKEN=${secret}`,
+				model: 'test-model',
+				provider: 'test',
+				tokenUsage: { input: 1, output: 1 },
+				iterations: 1,
+				toolCallsExecuted: 0,
+			})),
+		};
+
+		const channel = createTelegramChannel({
+			token: 'token',
+			allowedUserIds: [42],
+			workspacePath: '/tmp/mama-telegram-tests',
+			agent: agent as never,
+			adapter: mock.adapter,
+		});
+		await channel.start();
+		await channel.handleIncoming({ chatId: 5, fromId: 42, text: 'go' });
+
+		const sentText = mock.sent.map((entry) => entry.text).join('\n');
+		expect(sentText).toContain('MAMA_TELEGRAM_TOKEN=[REDACTED]');
+		expect(sentText).not.toContain(secret);
+	});
+
 	it('handles inline approval flow with approve/deny/always callbacks', async () => {
 		const mock = createMockAdapter();
 		let approvalHandler:

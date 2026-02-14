@@ -40,6 +40,7 @@ import {
 	createFsCapability,
 	createNetworkCapability,
 	createSandbox,
+	createSchedulerCapability,
 	createShellCapability,
 } from './sandbox/index.js';
 import {
@@ -179,6 +180,7 @@ function createAppRuntime(configPath?: string, silentLogs = true): AppRuntime {
 	sandbox.register(createFsCapability(config.sandbox.filesystem, homePath));
 	sandbox.register(createShellCapability(config.sandbox.shell));
 	sandbox.register(createNetworkCapability(config.sandbox.network));
+	sandbox.register(createSchedulerCapability());
 
 	function createSessionAgent(): ReturnType<typeof createAgent> {
 		return createAgent({

@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '../utils/logger.js';
+import { redactSecrets } from '../utils/secret-redaction.js';
 import type {
 	AuditEntry,
 	Capability,
@@ -21,15 +22,193 @@ type SegmentClassification = 'safe' | 'ask' | 'denied' | 'unknown';
 
 const SHELL_EXPANSION_PATTERN = /`|\$\(|\$\{|<\(|>\(|\n/;
 const SHELL_REDIRECTION_PATTERN = /(^|\s)(?:>|>>|<|<<|1>|1>>|2>|2>>|&>)/;
+const SEGMENT_OPERATORS = new Set(['|', '||', '&&', ';']);
+const TOKEN_OPERATORS = new Set([
+	'|',
+	'||',
+	'&&',
+	';',
+	'>',
+	'>>',
+	'<',
+	'<<',
+	'1>',
+	'1>>',
+	'2>',
+	'2>>',
+	'&>',
+]);
+
+function tokenizeShell(input: string): string[] {
+	const tokens: string[] = [];
+	let current = '';
+	let inSingle = false;
+	let inDouble = false;
+	let escaping = false;
+
+	const flush = () => {
+		if (current.length > 0) {
+			tokens.push(current);
+			current = '';
+		}
+	};
+
+	for (let i = 0; i < input.length; i++) {
+		const char = input[i];
+		if (char === undefined) continue;
+
+		if (inSingle) {
+			if (char === "'") {
+				inSingle = false;
+				continue;
+			}
+			current += char;
+			continue;
+		}
+
+		if (inDouble) {
+			if (escaping) {
+				current += char;
+				escaping = false;
+				continue;
+			}
+			if (char === '\\') {
+				escaping = true;
+				continue;
+			}
+			if (char === '"') {
+				inDouble = false;
+				continue;
+			}
+			current += char;
+			continue;
+		}
+
+		if (escaping) {
+			current += char;
+			escaping = false;
+			continue;
+		}
+
+		if (char === '\\') {
+			escaping = true;
+			continue;
+		}
+		if (char === "'") {
+			inSingle = true;
+			continue;
+		}
+		if (char === '"') {
+			inDouble = true;
+			continue;
+		}
+		if (/\s/.test(char)) {
+			flush();
+			continue;
+		}
+
+		const rest = input.slice(i);
+		const operatorMatch = rest.match(/^(?:\|\||&&|1>>|1>|2>>|2>|>>|<<|&>|[|;&<>])/);
+		if (operatorMatch?.[0]) {
+			flush();
+			tokens.push(operatorMatch[0]);
+			i += operatorMatch[0].length - 1;
+			continue;
+		}
+
+		current += char;
+	}
+
+	if (escaping) {
+		current += '\\';
+	}
+	flush();
+
+	return tokens;
+}
+
+function normalizeTokens(tokens: string[]): string[] {
+	return tokens.map((token) => token.toLowerCase());
+}
+
+function isOperatorToken(token: string): boolean {
+	return TOKEN_OPERATORS.has(token);
+}
+
+function tokenMatchesPatternToken(token: string, patternToken: string): boolean {
+	if (patternToken.endsWith('=')) {
+		return token.startsWith(patternToken);
+	}
+	if (patternToken.startsWith('/')) {
+		return token.startsWith(patternToken);
+	}
+	return token === patternToken;
+}
+
+function matchesPatternInTokens(tokens: string[], patternTokens: string[]): boolean {
+	if (patternTokens.length === 0 || tokens.length < patternTokens.length) {
+		return false;
+	}
+
+	for (let start = 0; start <= tokens.length - patternTokens.length; start++) {
+		let matched = true;
+		for (let offset = 0; offset < patternTokens.length; offset++) {
+			const token = tokens[start + offset];
+			const patternToken = patternTokens[offset];
+			if (!token || !patternToken || !tokenMatchesPatternToken(token, patternToken)) {
+				matched = false;
+				break;
+			}
+		}
+		if (matched) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+function matchesDeniedPattern(tokens: string[], deniedPatterns: string[]): string | null {
+	for (const pattern of deniedPatterns) {
+		const normalizedPatternTokens = normalizeTokens(tokenizeShell(pattern)).filter(
+			(token) => token.length > 0,
+		);
+		if (normalizedPatternTokens.length === 0) continue;
+		if (matchesPatternInTokens(tokens, normalizedPatternTokens)) {
+			return pattern;
+		}
+	}
+	return null;
+}
 
 /**
  * Splits a compound command string into individual segments by
  * pipe (|), semicolon (;), and logical operators (&& and ||).
  */
 export function parseCommand(command: string): string[] {
-	// Split on |, ;, &&, || — keeping the delimiters out
-	const segments = command.split(/\s*(?:\|\||&&|[|;])\s*/);
-	return segments.map((s) => s.trim()).filter((s) => s.length > 0);
+	const tokens = tokenizeShell(command);
+	const segments: string[] = [];
+	let current: string[] = [];
+
+	const flush = () => {
+		if (current.length === 0) return;
+		const segment = current.join(' ').trim();
+		if (segment.length > 0) {
+			segments.push(segment);
+		}
+		current = [];
+	};
+
+	for (const token of tokens) {
+		if (SEGMENT_OPERATORS.has(token)) {
+			flush();
+			continue;
+		}
+		current.push(token);
+	}
+
+	flush();
+	return segments;
 }
 
 /**
@@ -42,13 +221,14 @@ export function classifySegment(
 	config: ShellSandboxConfig,
 ): SegmentClassification {
 	const trimmed = segment.trim();
-	const lowered = trimmed.toLowerCase();
+	if (trimmed.length === 0) {
+		return 'unknown';
+	}
 
-	// Check denied patterns first — substring match
-	for (const pattern of config.deniedPatterns) {
-		if (lowered.includes(pattern.toLowerCase())) {
-			return 'denied';
-		}
+	const normalizedTokens = normalizeTokens(tokenizeShell(trimmed));
+	const matchedDeniedPattern = matchesDeniedPattern(normalizedTokens, config.deniedPatterns);
+	if (matchedDeniedPattern) {
+		return 'denied';
 	}
 
 	// Shell expansions and redirections are never auto-approved.
@@ -57,28 +237,30 @@ export function classifySegment(
 		return 'ask';
 	}
 
-	// Extract the command base (first word, or first two words for compound commands like "git status")
-	const words = trimmed.split(/\s+/);
+	const words = normalizedTokens.filter((token) => token.length > 0 && !isOperatorToken(token));
+	if (words.length === 0) {
+		return 'unknown';
+	}
 
 	// Check safe commands — match against command base
 	for (const safe of config.safeCommands) {
-		const safeWords = safe.split(/\s+/);
-		if (safeWords.length <= words.length) {
-			const baseSlice = words.slice(0, safeWords.length).join(' ');
-			if (baseSlice === safe) {
-				return 'safe';
-			}
+		const safeWords = normalizeTokens(tokenizeShell(safe)).filter(
+			(token) => !isOperatorToken(token),
+		);
+		if (safeWords.length > words.length || safeWords.length === 0) continue;
+		const matches = safeWords.every((safeWord, idx) => words[idx] === safeWord);
+		if (matches) {
+			return 'safe';
 		}
 	}
 
 	// Check ask commands — match against command base
 	for (const ask of config.askCommands) {
-		const askWords = ask.split(/\s+/);
-		if (askWords.length <= words.length) {
-			const baseSlice = words.slice(0, askWords.length).join(' ');
-			if (baseSlice === ask) {
-				return 'ask';
-			}
+		const askWords = normalizeTokens(tokenizeShell(ask)).filter((token) => !isOperatorToken(token));
+		if (askWords.length > words.length || askWords.length === 0) continue;
+		const matches = askWords.every((askWord, idx) => words[idx] === askWord);
+		if (matches) {
+			return 'ask';
 		}
 	}
 
@@ -106,10 +288,26 @@ const MAX_BUFFER_BYTES = 1024 * 1024;
 export function createShellCapability(config: ShellSandboxConfig): Capability {
 	function checkPermission(request: PermissionRequest): PermissionDecision {
 		const command = request.resource;
+		const redactedCommand = redactSecrets(command);
 		const segments = parseCommand(command);
+		const normalizedTokens = normalizeTokens(tokenizeShell(command));
 
 		if (segments.length === 0) {
 			return { allowed: false, reason: 'Empty command', level: 'denied' };
+		}
+
+		const matchedDeniedPattern = matchesDeniedPattern(normalizedTokens, config.deniedPatterns);
+		if (matchedDeniedPattern) {
+			logger.warn('Shell command denied by global pattern', {
+				command: redactedCommand,
+				pattern: matchedDeniedPattern,
+				requestedBy: request.requestedBy,
+			});
+			return {
+				allowed: false,
+				reason: `Command denied by policy pattern: "${matchedDeniedPattern}"`,
+				level: 'denied',
+			};
 		}
 
 		let needsApproval = false;
@@ -123,14 +321,15 @@ export function createShellCapability(config: ShellSandboxConfig): Capability {
 			const classification = classifySegment(segment, config);
 
 			if (classification === 'denied') {
+				const redactedSegment = redactSecrets(segment);
 				logger.warn('Shell command denied', {
-					command,
-					segment,
+					command: redactedCommand,
+					segment: redactedSegment,
 					requestedBy: request.requestedBy,
 				});
 				return {
 					allowed: false,
-					reason: `Command segment denied: "${segment}"`,
+					reason: `Command segment denied: "${redactedSegment}"`,
 					level: 'denied',
 				};
 			}
@@ -154,17 +353,18 @@ export function createShellCapability(config: ShellSandboxConfig): Capability {
 		const command = params.command as string | undefined;
 		const cwd = params.cwd as string | undefined;
 		const timeout = (params.timeout as number | undefined) ?? DEFAULT_TIMEOUT_MS;
+		const redactedCommand = redactSecrets(command ?? '');
 
 		if (!command || typeof command !== 'string') {
 			const entry = createErrorAuditEntry(
 				action,
-				command ?? '',
+				redactedCommand,
 				'Missing or invalid command parameter',
 			);
 			return {
 				success: false,
 				output: null,
-				error: 'Missing or invalid command parameter',
+				error: redactSecrets('Missing or invalid command parameter'),
 				auditEntry: entry,
 				durationMs: 0,
 			};
@@ -180,26 +380,30 @@ export function createShellCapability(config: ShellSandboxConfig): Capability {
 		const decision = checkPermission(request);
 
 		if (!decision.allowed) {
+			const redactedDecisionReason = redactSecrets(decision.reason);
 			const entry: AuditEntry = {
 				id: uuidv4(),
 				timestamp: new Date(),
 				capability: 'shell',
 				action,
-				resource: command,
-				params: { command, cwd, timeout },
+				resource: redactedCommand,
+				params: { command: redactedCommand, cwd, timeout },
 				decision: 'rule-denied',
 				result: 'denied',
-				error: decision.reason,
+				error: redactedDecisionReason,
 				durationMs: 0,
 				requestedBy: request.requestedBy,
 			};
 
-			logger.warn('Shell execution denied', { command, reason: decision.reason });
+			logger.warn('Shell execution denied', {
+				command: redactedCommand,
+				reason: redactedDecisionReason,
+			});
 
 			return {
 				success: false,
 				output: null,
-				error: decision.reason,
+				error: redactedDecisionReason,
 				auditEntry: entry,
 				durationMs: 0,
 			};
@@ -211,8 +415,8 @@ export function createShellCapability(config: ShellSandboxConfig): Capability {
 				timestamp: new Date(),
 				capability: 'shell',
 				action,
-				resource: command,
-				params: { command, cwd, timeout },
+				resource: redactedCommand,
+				params: { command: redactedCommand, cwd, timeout },
 				decision: 'rule-denied',
 				result: 'denied',
 				error: 'Missing explicit user approval token',
@@ -220,7 +424,7 @@ export function createShellCapability(config: ShellSandboxConfig): Capability {
 				requestedBy: request.requestedBy,
 			};
 
-			logger.warn('Shell execution blocked: missing approval token', { command });
+			logger.warn('Shell execution blocked: missing approval token', { command: redactedCommand });
 
 			return {
 				success: false,
@@ -235,9 +439,14 @@ export function createShellCapability(config: ShellSandboxConfig): Capability {
 
 		try {
 			const result = await executeShellCommand(command, { cwd, timeout });
+			const redactedResult = {
+				stdout: redactSecrets(result.stdout),
+				stderr: redactSecrets(result.stderr),
+				exitCode: result.exitCode,
+			} satisfies ShellExecOutput;
 			const durationMs = Date.now() - startTime;
 
-			const outputStr = formatOutput(result);
+			const outputStr = formatOutput(redactedResult);
 			const truncatedOutput = outputStr.slice(0, MAX_AUDIT_OUTPUT_LENGTH);
 
 			const entry: AuditEntry = {
@@ -245,44 +454,47 @@ export function createShellCapability(config: ShellSandboxConfig): Capability {
 				timestamp: new Date(),
 				capability: 'shell',
 				action,
-				resource: command,
-				params: { command, cwd, timeout },
+				resource: redactedCommand,
+				params: { command: redactedCommand, cwd, timeout },
 				decision: decision.level === 'auto' ? 'auto-approved' : 'user-approved',
-				result: result.exitCode === 0 ? 'success' : 'error',
+				result: redactedResult.exitCode === 0 ? 'success' : 'error',
 				output: truncatedOutput,
-				error: result.exitCode !== 0 ? result.stderr.slice(0, MAX_AUDIT_OUTPUT_LENGTH) : undefined,
+				error:
+					redactedResult.exitCode !== 0
+						? redactedResult.stderr.slice(0, MAX_AUDIT_OUTPUT_LENGTH)
+						: undefined,
 				durationMs,
 				requestedBy: request.requestedBy,
 			};
 
 			logger.info('Shell command executed', {
-				command,
-				exitCode: result.exitCode,
+				command: redactedCommand,
+				exitCode: redactedResult.exitCode,
 				durationMs,
 			});
 
 			return {
-				success: result.exitCode === 0,
+				success: redactedResult.exitCode === 0,
 				output: {
-					stdout: result.stdout,
-					stderr: result.stderr,
-					exitCode: result.exitCode,
+					stdout: redactedResult.stdout,
+					stderr: redactedResult.stderr,
+					exitCode: redactedResult.exitCode,
 				},
-				error: result.exitCode !== 0 ? result.stderr : undefined,
+				error: redactedResult.exitCode !== 0 ? redactedResult.stderr : undefined,
 				auditEntry: entry,
 				durationMs,
 			};
 		} catch (err: unknown) {
 			const durationMs = Date.now() - startTime;
-			const errorMessage = err instanceof Error ? err.message : String(err);
+			const errorMessage = redactSecrets(err instanceof Error ? err.message : String(err));
 
 			const entry: AuditEntry = {
 				id: uuidv4(),
 				timestamp: new Date(),
 				capability: 'shell',
 				action,
-				resource: command,
-				params: { command, cwd, timeout },
+				resource: redactedCommand,
+				params: { command: redactedCommand, cwd, timeout },
 				decision: decision.level === 'auto' ? 'auto-approved' : 'user-approved',
 				result: 'error',
 				error: errorMessage.slice(0, MAX_AUDIT_OUTPUT_LENGTH),
@@ -290,7 +502,11 @@ export function createShellCapability(config: ShellSandboxConfig): Capability {
 				requestedBy: request.requestedBy,
 			};
 
-			logger.error('Shell command failed', { command, error: errorMessage, durationMs });
+			logger.error('Shell command failed', {
+				command: redactedCommand,
+				error: errorMessage,
+				durationMs,
+			});
 
 			return {
 				success: false,

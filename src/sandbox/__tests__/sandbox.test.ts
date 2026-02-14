@@ -207,4 +207,23 @@ describe('Sandbox', () => {
 		expect(receivedParams?.__approvedByUser).toBe(true);
 		expect(receivedParams?.requestedBy).toBe('tester');
 	});
+
+	it('redacts sensitive params in denied audit entries', async () => {
+		const mockAudit = { log: vi.fn() };
+		const sandbox = createSandbox(mockAudit);
+		const cap = createMockCapability('shell', false);
+		sandbox.register(cap);
+
+		await sandbox.execute('shell', 'run', {
+			command: 'echo MAMA_TELEGRAM_TOKEN=123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567',
+		});
+
+		const logged = mockAudit.log.mock.calls[0]?.[0] as {
+			resource?: string;
+			params?: { command?: string };
+		};
+		expect(logged.resource).toContain('MAMA_TELEGRAM_TOKEN=[REDACTED]');
+		expect(logged.params?.command).toContain('MAMA_TELEGRAM_TOKEN=[REDACTED]');
+		expect(logged.resource).not.toContain('123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567');
+	});
 });

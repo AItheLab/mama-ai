@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '../utils/logger.js';
+import { redactSecrets, redactSecretsInValue } from '../utils/secret-redaction.js';
 import type {
 	ApprovalHandler,
 	ApprovalRequest,
@@ -95,15 +96,21 @@ export function createSandbox(auditStore?: AuditStore): Sandbox {
 			};
 		}
 
-		const resource = (baseParams.path ?? baseParams.command ?? baseParams.url ?? '') as string;
+		const resource = (baseParams.path ??
+			baseParams.command ??
+			baseParams.url ??
+			baseParams.id ??
+			baseParams.schedule ??
+			'') as string;
 		const permission = check(capName, action, resource, requestedBy);
 
 		if (!permission.allowed) {
+			const redactedResource = redactSecrets(resource);
 			logger.warn('Capability denied', {
 				capability: capName,
 				action,
-				resource,
-				reason: permission.reason,
+				resource: redactedResource,
+				reason: redactSecrets(permission.reason),
 			});
 			const entry = createDeniedAuditEntry(
 				capName,
@@ -152,16 +159,21 @@ export function createSandbox(auditStore?: AuditStore): Sandbox {
 
 			const approved = await approvalHandler(approvalReq);
 			if (!approved) {
-				logger.info('User denied capability', { capability: capName, action, resource });
+				logger.info('User denied capability', {
+					capability: capName,
+					action,
+					resource: redactSecrets(resource),
+				});
 				const entry: AuditEntry = {
 					id: uuidv4(),
 					timestamp: new Date(),
 					capability: capName,
 					action,
-					resource,
-					params: baseParams,
+					resource: redactSecrets(resource),
+					params: redactSecretsInValue(baseParams) as Record<string, unknown>,
 					decision: 'user-denied',
 					result: 'denied',
+					error: 'User denied the action',
 					durationMs: 0,
 					requestedBy,
 				};
@@ -217,16 +229,17 @@ function createDeniedAuditEntry(
 	reason: string,
 	requestedBy: string,
 ): AuditEntry {
+	const resource = (params.path ?? params.command ?? params.url ?? '') as string;
 	return {
 		id: uuidv4(),
 		timestamp: new Date(),
 		capability,
 		action,
-		resource: (params.path ?? params.command ?? params.url ?? '') as string,
-		params,
+		resource: redactSecrets(resource),
+		params: redactSecretsInValue(params) as Record<string, unknown>,
 		decision: 'rule-denied',
 		result: 'denied',
-		error: reason,
+		error: redactSecrets(reason),
 		durationMs: 0,
 		requestedBy,
 	};

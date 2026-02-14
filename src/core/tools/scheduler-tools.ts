@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { getScheduler } from '../../scheduler/registry.js';
 import { createTool, type Tool } from './types.js';
 
 const CreateScheduledJobParams = z.object({
@@ -33,15 +32,14 @@ const createScheduledJobTool = createTool({
 		},
 		required: ['schedule', 'task'],
 	},
-	async execute(params) {
-		const scheduler = getScheduler();
-		if (!scheduler) {
-			return { success: false, output: null, error: 'Scheduler is not available.' };
-		}
-
-		const id = await scheduler.createJob(params);
-		const created = await scheduler.getJob(id);
-		return { success: true, output: created };
+	async execute(params, context) {
+		const result = await context.sandbox.execute(
+			'scheduler',
+			'create_job',
+			{ name: params.name, schedule: params.schedule, task: params.task },
+			context.requestedBy,
+		);
+		return { success: result.success, output: result.output, error: result.error };
 	},
 });
 
@@ -59,16 +57,23 @@ const listScheduledJobsTool = createTool({
 		},
 		required: [],
 	},
-	async execute(params) {
-		const scheduler = getScheduler();
-		if (!scheduler) {
-			return { success: false, output: null, error: 'Scheduler is not available.' };
+	async execute(params, context) {
+		const result = await context.sandbox.execute('scheduler', 'list_jobs', {}, context.requestedBy);
+		if (!result.success) {
+			return { success: false, output: null, error: result.error };
 		}
-		const jobs = await scheduler.listJobs();
-		return {
-			success: true,
-			output: params.enabledOnly ? jobs.filter((job) => job.enabled) : jobs,
-		};
+		const jobs = (result.output as unknown[] | null) ?? [];
+		const enabledOnly = params.enabledOnly === true;
+		if (!enabledOnly) {
+			return { success: true, output: jobs };
+		}
+
+		const filtered = jobs.filter((job) => {
+			if (job === null || typeof job !== 'object' || Array.isArray(job)) return false;
+			const enabled = (job as Record<string, unknown>).enabled;
+			return Boolean(enabled);
+		});
+		return { success: true, output: filtered };
 	},
 });
 
@@ -88,31 +93,14 @@ const manageJobTool = createTool({
 		},
 		required: ['id', 'action'],
 	},
-	async execute(params) {
-		const scheduler = getScheduler();
-		if (!scheduler) {
-			return { success: false, output: null, error: 'Scheduler is not available.' };
-		}
-
-		switch (params.action) {
-			case 'enable':
-				await scheduler.enableJob(params.id);
-				break;
-			case 'disable':
-				await scheduler.disableJob(params.id);
-				break;
-			case 'delete':
-				await scheduler.deleteJob(params.id);
-				break;
-		}
-
-		return {
-			success: true,
-			output: {
-				id: params.id,
-				action: params.action,
-			},
-		};
+	async execute(params, context) {
+		const result = await context.sandbox.execute(
+			'scheduler',
+			'manage_job',
+			{ id: params.id, action: params.action },
+			context.requestedBy,
+		);
+		return { success: result.success, output: result.output, error: result.error };
 	},
 });
 

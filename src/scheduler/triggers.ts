@@ -4,6 +4,7 @@ import { createLogger } from '../utils/logger.js';
 import type { JobRunResult } from './types.js';
 
 const logger = createLogger('scheduler:triggers');
+const MAX_WEBHOOK_BODY_BYTES = 256 * 1024;
 
 type FileWatcherEvent = 'add' | 'change' | 'unlink' | 'rename';
 
@@ -90,8 +91,14 @@ function fillTemplate(template: string, values: Record<string, string>): string 
 
 async function readBody(req: IncomingMessage): Promise<string> {
 	const chunks: Buffer[] = [];
+	let total = 0;
 	for await (const chunk of req) {
-		chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+		const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+		total += buf.length;
+		if (total > MAX_WEBHOOK_BODY_BYTES) {
+			throw new Error('Request body too large');
+		}
+		chunks.push(buf);
 	}
 	return Buffer.concat(chunks).toString('utf-8');
 }

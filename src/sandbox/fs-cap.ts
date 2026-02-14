@@ -3,6 +3,8 @@ import {
 	readdirSync,
 	readFileSync,
 	realpathSync,
+	renameSync,
+	statSync,
 	unlinkSync,
 	writeFileSync,
 } from 'node:fs';
@@ -22,6 +24,74 @@ const logger = createLogger('sandbox:fs');
 
 /** Max bytes to store in audit output field */
 const AUDIT_OUTPUT_MAX_BYTES = 1024;
+const MAX_READ_BYTES = 256 * 1024;
+const MAX_SEARCH_RESULTS = 5000;
+
+function sanitizeParamsForAudit(
+	action: string,
+	params: Record<string, unknown>,
+): Record<string, unknown> {
+	if (action === 'write') {
+		const content = typeof params.content === 'string' ? params.content : '';
+		const copy: Record<string, unknown> = { ...params };
+		delete copy.content;
+		copy.contentLength = Buffer.byteLength(content, 'utf-8');
+		return copy;
+	}
+	if (action === 'read') {
+		const copy: Record<string, unknown> = { ...params };
+		delete copy.content;
+		return copy;
+	}
+	return { ...params };
+}
+
+function walkSearch(
+	root: string,
+	pattern: string,
+	limit: number,
+): { matches: string[]; truncated: boolean } {
+	const matches: string[] = [];
+	let truncated = false;
+
+	const queue: string[] = [root];
+	while (queue.length > 0) {
+		const current = queue.shift();
+		if (!current) continue;
+
+		let entries: import('node:fs').Dirent[];
+		try {
+			entries = readdirSync(current, {
+				withFileTypes: true,
+			}) as unknown as import('node:fs').Dirent[];
+		} catch {
+			continue;
+		}
+
+		for (const entry of entries) {
+			if (matches.length >= limit) {
+				truncated = true;
+				return { matches, truncated };
+			}
+
+			// Don't follow symlinks during recursive search.
+			if (entry.isSymbolicLink()) {
+				continue;
+			}
+
+			const name = String(entry.name);
+			const fullPath = path.join(current, name);
+			if (micromatch.isMatch(name, pattern)) {
+				matches.push(fullPath);
+			}
+			if (entry.isDirectory()) {
+				queue.push(fullPath);
+			}
+		}
+	}
+
+	return { matches, truncated };
+}
 
 interface FsPathRule {
 	path: string;
@@ -91,6 +161,13 @@ function isPathTraversal(rawPath: string, resolvedPath: string, homePath: string
 export function createFsCapability(config: FilesystemSandboxConfig, homePath: string): Capability {
 	// Pre-resolve config paths
 	const resolvedWorkspace = path.resolve(expandTilde(config.workspace, homePath));
+	const resolvedWorkspaceReal = (() => {
+		try {
+			return realpathSync(resolvedWorkspace);
+		} catch {
+			return resolvedWorkspace;
+		}
+	})();
 	const resolvedDeniedPatterns = config.deniedPaths.map((p) =>
 		path.resolve(expandTilde(p, homePath)),
 	);
@@ -167,7 +244,10 @@ export function createFsCapability(config: FilesystemSandboxConfig, homePath: st
 		}
 
 		// 2. Workspace is always allowed (auto level)
-		if (effectivePath === resolvedWorkspace || effectivePath.startsWith(`${resolvedWorkspace}/`)) {
+		if (
+			effectivePath === resolvedWorkspaceReal ||
+			effectivePath.startsWith(`${resolvedWorkspaceReal}/`)
+		) {
 			return { allowed: true, level: 'auto' };
 		}
 
@@ -205,11 +285,23 @@ export function createFsCapability(config: FilesystemSandboxConfig, homePath: st
 	): Promise<CapabilityResult> {
 		const rawPath = params.path as string | undefined;
 
-		if (!rawPath) {
+		const requestedBy = (params.requestedBy as string | undefined) ?? 'agent';
+
+		function resourceLabel(): string {
+			if (action === 'move') {
+				return `${String(params.sourcePath ?? '')} -> ${String(params.destinationPath ?? '')}`.trim();
+			}
+			if (action === 'search') {
+				return `${String(rawPath ?? '')} pattern=${String(params.pattern ?? '')}`.trim();
+			}
+			return String(rawPath ?? '');
+		}
+
+		if (!rawPath && action !== 'move') {
 			const auditEntry = createAuditEntry(
 				action,
-				'',
-				params,
+				resourceLabel(),
+				sanitizeParamsForAudit(action, params),
 				'rule-denied',
 				'error',
 				0,
@@ -225,125 +317,218 @@ export function createFsCapability(config: FilesystemSandboxConfig, homePath: st
 			};
 		}
 
-		const resolvedPath = resolveFsPath(rawPath);
-
-		// Check permission internally before executing
-		const permRequest: PermissionRequest = {
-			capability: 'filesystem',
-			action,
-			resource: rawPath,
-			requestedBy: (params.requestedBy as string | undefined) ?? 'agent',
-		};
-		const decision = checkPermission(permRequest);
-
-		if (!decision.allowed) {
-			const auditEntry = createAuditEntry(
-				action,
-				resolvedPath,
-				params,
-				'rule-denied',
-				'denied',
-				0,
-				undefined,
-				decision.reason,
-			);
-			logger.warn('Filesystem access denied', {
-				action,
-				path: resolvedPath,
-				reason: decision.reason,
-			});
+		function deny(
+			auditResource: string,
+			resolvedPath: string | undefined,
+			error: string,
+			result: AuditEntry['result'] = 'denied',
+		): CapabilityResult {
+			const auditParams = sanitizeParamsForAudit(action, params);
+			if (resolvedPath) {
+				auditParams.resolvedPath = resolvedPath;
+			}
 			return {
 				success: false,
 				output: null,
-				error: decision.reason,
-				auditEntry,
+				error,
+				auditEntry: createAuditEntry(
+					action,
+					auditResource,
+					auditParams,
+					'rule-denied',
+					result,
+					0,
+					undefined,
+					error,
+					requestedBy,
+				),
 				durationMs: 0,
 			};
 		}
 
-		if (decision.level === 'user-approved' && params.__approvedByUser !== true) {
-			const auditEntry = createAuditEntry(
-				action,
-				resolvedPath,
-				params,
-				'rule-denied',
-				'denied',
-				0,
-				undefined,
-				'Missing explicit user approval token',
-				permRequest.requestedBy,
-			);
-			return {
-				success: false,
-				output: null,
-				error: 'Missing explicit user approval token',
-				auditEntry,
-				durationMs: 0,
+		function requirePermission(
+			permissionAction: string,
+			resource: string,
+		):
+			| { ok: true; executionPath: string; decision: PermissionDecision }
+			| { ok: false; result: CapabilityResult } {
+			const resolvedPath = resolveFsPath(resource);
+			const permRequest: PermissionRequest = {
+				capability: 'filesystem',
+				action: permissionAction,
+				resource,
+				requestedBy,
 			};
-		}
+			const decision = checkPermission(permRequest);
+			if (!decision.allowed) {
+				logger.warn('Filesystem access denied', {
+					action: permissionAction,
+					path: resolvedPath,
+					reason: decision.reason,
+				});
+				return { ok: false, result: deny(resource, resolvedPath, decision.reason, 'denied') };
+			}
 
-		const actionPath = resolveActionPath(resolvedPath, action);
-		if (!actionPath.ok) {
-			const auditEntry = createAuditEntry(
-				action,
-				resolvedPath,
-				params,
-				'error',
-				'error',
-				0,
-				undefined,
-				`Path resolution failed: ${actionPath.reason}`,
-				permRequest.requestedBy,
-			);
-			return {
-				success: false,
-				output: null,
-				error: `Path resolution failed: ${actionPath.reason}`,
-				auditEntry,
-				durationMs: 0,
-			};
+			if (decision.level === 'user-approved' && params.__approvedByUser !== true) {
+				return {
+					ok: false,
+					result: deny(resource, resolvedPath, 'Missing explicit user approval token', 'denied'),
+				};
+			}
+
+			const actionPath = resolveActionPath(resolvedPath, permissionAction);
+			if (!actionPath.ok) {
+				return {
+					ok: false,
+					result: {
+						success: false,
+						output: null,
+						error: `Path resolution failed: ${actionPath.reason}`,
+						auditEntry: createAuditEntry(
+							action,
+							resolvedPath,
+							sanitizeParamsForAudit(action, params),
+							'error',
+							'error',
+							0,
+							undefined,
+							`Path resolution failed: ${actionPath.reason}`,
+							requestedBy,
+						),
+						durationMs: 0,
+					},
+				};
+			}
+
+			return { ok: true, executionPath: actionPath.path, decision };
 		}
-		const executionPath = actionPath.path;
 
 		const start = Date.now();
 
 		try {
 			let output: unknown;
 			let outputStr: string;
+			let auditResource = resourceLabel();
+			let auditDecision: AuditEntry['decision'] = 'auto-approved';
 
 			switch (action) {
 				case 'read': {
-					const content = readFileSync(executionPath, 'utf-8');
+					const perm = requirePermission('read', rawPath ?? '');
+					if (!perm.ok) return perm.result;
+					const size = statSync(perm.executionPath).size;
+					if (size > MAX_READ_BYTES) {
+						return deny(
+							rawPath ?? '',
+							perm.executionPath,
+							`File too large to read (${size} bytes, limit ${MAX_READ_BYTES}).`,
+							'error',
+						);
+					}
+					const content = readFileSync(perm.executionPath, 'utf-8');
 					output = content;
-					outputStr = content;
+					outputStr = `${String(Buffer.byteLength(content, 'utf-8'))} bytes read`;
+					auditResource = rawPath ?? '';
+					auditDecision =
+						perm.decision.level === 'user-approved' ? 'user-approved' : 'auto-approved';
 					break;
 				}
 				case 'write': {
+					const perm = requirePermission('write', rawPath ?? '');
+					if (!perm.ok) return perm.result;
 					const content = (params.content as string) ?? '';
-					writeFileSync(executionPath, content, 'utf-8');
+					writeFileSync(perm.executionPath, content, 'utf-8');
 					const bytesWritten = Buffer.byteLength(content, 'utf-8');
 					output = { bytesWritten };
 					outputStr = `${String(bytesWritten)} bytes written`;
+					auditResource = rawPath ?? '';
+					auditDecision =
+						perm.decision.level === 'user-approved' ? 'user-approved' : 'auto-approved';
 					break;
 				}
 				case 'list': {
-					const entries = readdirSync(executionPath);
+					const perm = requirePermission('list', rawPath ?? '');
+					if (!perm.ok) return perm.result;
+					const entries = readdirSync(perm.executionPath);
 					output = entries;
 					outputStr = entries.join('\n');
+					auditResource = rawPath ?? '';
+					auditDecision =
+						perm.decision.level === 'user-approved' ? 'user-approved' : 'auto-approved';
 					break;
 				}
 				case 'delete': {
-					unlinkSync(executionPath);
+					const perm = requirePermission('delete', rawPath ?? '');
+					if (!perm.ok) return perm.result;
+					unlinkSync(perm.executionPath);
 					output = { deleted: true };
-					outputStr = `Deleted ${executionPath}`;
+					outputStr = `Deleted ${perm.executionPath}`;
+					auditResource = rawPath ?? '';
+					auditDecision =
+						perm.decision.level === 'user-approved' ? 'user-approved' : 'auto-approved';
+					break;
+				}
+				case 'search': {
+					const pattern = params.pattern as string | undefined;
+					if (!pattern || typeof pattern !== 'string') {
+						return deny(
+							rawPath ?? '',
+							rawPath ? resolveFsPath(rawPath) : undefined,
+							'Missing required parameter: pattern',
+							'error',
+						);
+					}
+					const perm = requirePermission('search', rawPath ?? '');
+					if (!perm.ok) return perm.result;
+
+					const { matches, truncated } = walkSearch(
+						perm.executionPath,
+						pattern,
+						MAX_SEARCH_RESULTS,
+					);
+					output = matches;
+					outputStr = truncated
+						? `${matches.length} match(es) (truncated at ${MAX_SEARCH_RESULTS})`
+						: `${matches.length} match(es)`;
+					auditResource = `${rawPath ?? ''} pattern=${pattern}`;
+					auditDecision =
+						perm.decision.level === 'user-approved' ? 'user-approved' : 'auto-approved';
+					break;
+				}
+				case 'move': {
+					const sourcePath = params.sourcePath as string | undefined;
+					const destinationPath = params.destinationPath as string | undefined;
+					if (!sourcePath || !destinationPath) {
+						const resource = `${String(sourcePath ?? '')} -> ${String(destinationPath ?? '')}`;
+						return deny(
+							resource,
+							'',
+							'Missing required parameters: sourcePath, destinationPath',
+							'error',
+						);
+					}
+
+					const sourcePerm = requirePermission('delete', sourcePath);
+					if (!sourcePerm.ok) return sourcePerm.result;
+					const destPerm = requirePermission('write', destinationPath);
+					if (!destPerm.ok) return destPerm.result;
+
+					renameSync(sourcePerm.executionPath, destPerm.executionPath);
+					output = { moved: true };
+					outputStr = `Moved ${sourcePerm.executionPath} -> ${destPerm.executionPath}`;
+					auditResource = `${sourcePath} -> ${destinationPath}`;
+					auditDecision =
+						sourcePerm.decision.level === 'user-approved' ||
+						destPerm.decision.level === 'user-approved'
+							? 'user-approved'
+							: 'auto-approved';
 					break;
 				}
 				default: {
 					const durationMs = Date.now() - start;
 					const auditEntry = createAuditEntry(
 						action,
-						executionPath,
-						params,
+						'',
+						sanitizeParamsForAudit(action, params),
 						'rule-denied',
 						'error',
 						durationMs,
@@ -361,23 +546,21 @@ export function createFsCapability(config: FilesystemSandboxConfig, homePath: st
 			}
 
 			const durationMs = Date.now() - start;
-			const decisionLabel: AuditEntry['decision'] =
-				decision.level === 'user-approved' ? 'user-approved' : 'auto-approved';
 			const auditEntry = createAuditEntry(
 				action,
-				executionPath,
-				params,
-				decisionLabel,
+				auditResource,
+				sanitizeParamsForAudit(action, params),
+				auditDecision,
 				'success',
 				durationMs,
 				truncateOutput(outputStr, AUDIT_OUTPUT_MAX_BYTES),
 				undefined,
-				permRequest.requestedBy,
+				requestedBy,
 			);
 
 			logger.debug('Filesystem action executed', {
 				action,
-				path: executionPath,
+				path: rawPath,
 				durationMs,
 			});
 
@@ -394,20 +577,20 @@ export function createFsCapability(config: FilesystemSandboxConfig, homePath: st
 
 			logger.error('Filesystem action failed', {
 				action,
-				path: executionPath,
+				path: rawPath,
 				error: errorMessage,
 			});
 
 			const auditEntry = createAuditEntry(
 				action,
-				executionPath,
-				params,
+				String(rawPath ?? ''),
+				sanitizeParamsForAudit(action, params),
 				'error',
 				'error',
 				durationMs,
 				undefined,
 				errorMessage,
-				permRequest.requestedBy,
+				requestedBy,
 			);
 
 			return {

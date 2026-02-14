@@ -10,10 +10,6 @@ function fromCapabilityResult(result: CapabilityResult): ToolResult {
 	};
 }
 
-function shQuote(value: string): string {
-	return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
 const ReadFileParams = z.object({
 	path: z.string().min(1),
 });
@@ -117,19 +113,17 @@ const searchFilesTool = createTool({
 		required: ['path', 'pattern'],
 	},
 	async execute(params, context) {
-		const command = `find ${shQuote(params.path)} -name ${shQuote(params.pattern)} -print`;
-		const result = await context.sandbox.execute('shell', 'run', { command }, context.requestedBy);
+		const result = await context.sandbox.execute(
+			'filesystem',
+			'search',
+			{ path: params.path, pattern: params.pattern },
+			context.requestedBy,
+		);
 
 		if (!result.success) {
 			return fromCapabilityResult(result);
 		}
-
-		const stdout = (result.output as { stdout?: string } | null)?.stdout ?? '';
-		const files = stdout
-			.split('\n')
-			.map((line) => line.trim())
-			.filter((line) => line.length > 0);
-		return { success: true, output: files };
+		return fromCapabilityResult(result);
 	},
 });
 
@@ -146,8 +140,12 @@ const moveFileTool = createTool({
 		required: ['sourcePath', 'destinationPath'],
 	},
 	async execute(params, context) {
-		const command = `mv -- ${shQuote(params.sourcePath)} ${shQuote(params.destinationPath)}`;
-		const result = await context.sandbox.execute('shell', 'run', { command }, context.requestedBy);
+		const result = await context.sandbox.execute(
+			'filesystem',
+			'move',
+			{ sourcePath: params.sourcePath, destinationPath: params.destinationPath },
+			context.requestedBy,
+		);
 		return fromCapabilityResult(result);
 	},
 });

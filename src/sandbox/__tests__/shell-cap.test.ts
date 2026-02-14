@@ -52,4 +52,20 @@ describe('shell-cap security hardening', () => {
 		expect(result.success).toBe(true);
 		expect((result.output as { stdout?: string }).stdout).toContain('hello');
 	});
+
+	it('redacts secrets from shell output and audit entries', async () => {
+		const cap = createShellCapability(config);
+		const secret = '123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567';
+
+		const result = await cap.execute('run', {
+			command: `echo MAMA_TELEGRAM_TOKEN=${secret}`,
+		});
+
+		expect(result.success).toBe(true);
+		const output = result.output as { stdout?: string; stderr?: string };
+		expect(output.stdout).toContain('MAMA_TELEGRAM_TOKEN=[REDACTED]');
+		expect(output.stdout).not.toContain(secret);
+		expect(result.auditEntry.output).toContain('MAMA_TELEGRAM_TOKEN=[REDACTED]');
+		expect(result.auditEntry.output).not.toContain(secret);
+	});
 });

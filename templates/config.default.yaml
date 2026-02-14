@@ -63,7 +63,7 @@ sandbox:
   shell:
     safe_commands: ["ls", "cat", "head", "tail", "grep", "find", "wc", "date", "whoami", "pwd", "echo"]
     ask_commands: ["git commit", "git push", "mkdir", "cp", "mv"]
-    denied_patterns: ["rm -rf", "sudo", "curl | bash"]
+    denied_patterns: ["env", "printenv", "rm -rf", "sudo", "curl | bash"]
   network:
     allowed_domains: ["ollama.com", "api.telegram.org", "localhost"]
     ask_domains: true

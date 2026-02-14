@@ -7,6 +7,7 @@ import { createLogger } from '../utils/logger.js';
 import type { Channel } from './types.js';
 
 const logger = createLogger('channel:api');
+const MAX_REQUEST_BODY_BYTES = 256 * 1024;
 
 interface ApiRequest {
 	method: string;
@@ -55,7 +56,17 @@ function json(res: ServerResponse, statusCode: number, payload: unknown): void {
 function readBody(req: IncomingMessage): Promise<string> {
 	return new Promise((resolve, reject) => {
 		const chunks: Buffer[] = [];
-		req.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+		let total = 0;
+		req.on('data', (chunk) => {
+			const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+			total += buf.length;
+			if (total > MAX_REQUEST_BODY_BYTES) {
+				reject(new Error('Request body too large'));
+				req.destroy();
+				return;
+			}
+			chunks.push(buf);
+		});
 		req.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
 		req.on('error', reject);
 	});

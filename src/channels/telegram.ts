@@ -6,12 +6,14 @@ import type { createAuditStore } from '../sandbox/audit.js';
 import type { ApprovalRequest } from '../sandbox/types.js';
 import type { CronScheduler } from '../scheduler/cron.js';
 import { createLogger } from '../utils/logger.js';
+import { redactSecrets } from '../utils/secret-redaction.js';
 import type { Channel } from './types.js';
 
 const logger = createLogger('channel:telegram');
 
 const TELEGRAM_MESSAGE_LIMIT = 4096;
 const APPROVAL_TIMEOUT_MS = 5 * 60_000;
+const MAX_TELEGRAM_DOCUMENT_BYTES = 256 * 1024;
 
 type NotificationPriority = 'low' | 'normal' | 'high' | 'urgent';
 
@@ -133,7 +135,7 @@ function renderApprovalMessage(request: ApprovalRequest): string {
 	return [
 		'🔒 Permission Request',
 		`Action: ${request.capability}:${request.action}`,
-		`Path/Resource: ${request.resource}`,
+		`Path/Resource: ${redactSecrets(request.resource)}`,
 	].join('\n');
 }
 
@@ -147,7 +149,7 @@ async function sendChunked(
 	text: string,
 	options: { markdown?: boolean; disableNotification?: boolean } = {},
 ): Promise<void> {
-	const chunks = splitMessage(text);
+	const chunks = splitMessage(redactSecrets(text));
 	for (const chunk of chunks) {
 		await adapter.sendMessage(chatId, chunk, {
 			parseMode: options.markdown ? 'Markdown' : undefined,
@@ -425,7 +427,11 @@ async function downloadTelegramDocument(token: string, fileId: string): Promise<
 	if (!filePath) return '';
 	const response = await fetch(`https://api.telegram.org/file/bot${token}/${filePath}`);
 	if (!response.ok) return '';
-	return await response.text();
+	const text = await response.text();
+	if (Buffer.byteLength(text, 'utf-8') > MAX_TELEGRAM_DOCUMENT_BYTES) {
+		return '';
+	}
+	return text;
 }
 
 export function createTelegramHttpAdapter(token: string): TelegramAdapter {

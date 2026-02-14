@@ -198,6 +198,8 @@ shell:
 
   # Never allowed
   denied_patterns:
+    - "env"
+    - "printenv"
     - "rm -rf"
     - "rm -r /"
     - "sudo"
@@ -269,6 +271,7 @@ class ShellCapability implements Capability {
 - Timeout: 30 seconds default, configurable per command
 - Working directory restricted to allowed paths
 - Environment variables sanitized (no PATH manipulation)
+- stdout/stderr pass through secret redaction before memory/chat/audit
 - Output captured and size-limited (prevent memory bombs)
 - stderr captured separately for error analysis
 
