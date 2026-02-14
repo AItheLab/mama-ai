@@ -237,6 +237,7 @@ function createNaturalScheduleParser(router: RuntimeServices['router']) {
 async function createScheduler(
 	app: AppRuntime,
 	onRun?: (summary: string, priority?: 'low' | 'normal' | 'high' | 'urgent') => Promise<void>,
+	channel: 'api' | 'telegram' = 'api',
 ): Promise<CronScheduler> {
 	const scheduler = await createCronScheduler({
 		store: app.runtime.memoryStore,
@@ -245,7 +246,7 @@ async function createScheduler(
 		auditStore: app.auditStore,
 		runTask: async (task, context) => {
 			try {
-				const response = await app.createSessionAgent().processMessage(task, 'api');
+				const response = await app.createSessionAgent().processMessage(task, channel);
 				await onRun?.(`Job "${context.jobName}" executed.\n${response.content}`, 'normal');
 				return {
 					success: true,
@@ -371,7 +372,8 @@ async function runDaemonForeground(configPath?: string): Promise<void> {
 		await telegramChannel.sendProactiveMessage(chatId, text, priority);
 	};
 
-	const scheduler = await createScheduler(app, notify);
+	const schedulerChannel = app.config.channels.telegram.enabled ? 'telegram' : 'api';
+	const scheduler = await createScheduler(app, notify, schedulerChannel);
 	const heartbeat = createHeartbeat({
 		intervalMinutes: app.config.scheduler.heartbeat.intervalMinutes,
 		heartbeatFile: resolvePath(app.config.scheduler.heartbeat.heartbeatFile, app.mamaHome),
