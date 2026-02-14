@@ -50,10 +50,14 @@ export function createAgent(deps: AgentDeps): Agent {
 		options?.onEvent?.(event);
 	}
 
-	function buildRequest(toolsEnabled: boolean): LLMRequest {
+	function buildRequest(toolsEnabled: boolean, channel?: string): LLMRequest {
 		return {
 			messages: workingMemory.getMessages(),
-			systemPrompt: buildSystemPrompt(soul.getSoulPrompt(), workingMemory.getSystemInjection()),
+			systemPrompt: buildSystemPrompt(
+				soul.getSoulPrompt(),
+				workingMemory.getSystemInjection(),
+				channel,
+			),
 			taskType: 'general',
 			maxTokens: 4096,
 			tools: toolsEnabled ? getToolDefinitions() : undefined,
@@ -208,7 +212,7 @@ export function createAgent(deps: AgentDeps): Agent {
 		let toolCallsExecuted = 0;
 
 		for (let iteration = 0; iteration < maxIterations; iteration++) {
-			const response = await router.complete(buildRequest(Boolean(sandbox)));
+			const response = await router.complete(buildRequest(Boolean(sandbox), channel));
 			totalInputTokens += response.usage.inputTokens;
 			totalOutputTokens += response.usage.outputTokens;
 

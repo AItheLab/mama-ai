@@ -1,8 +1,21 @@
 /**
  * Builds the full system prompt for the agent from soul content and memory injections.
  */
-export function buildSystemPrompt(soul: string, memories?: string[]): string {
+export function buildSystemPrompt(
+	soul: string,
+	memories?: string[],
+	channel?: string,
+): string {
 	const parts: string[] = [soul];
+
+	if (channel) {
+		parts.push(`\n## Active Channel: ${channel}`);
+		if (channel === 'telegram') {
+			parts.push(
+				'You are currently connected and responding through Telegram. The bot is already configured and running — do not ask the user for bot tokens or chat IDs.',
+			);
+		}
+	}
 
 	if (memories && memories.length > 0) {
 		parts.push('\n## Relevant Memories');
